@@ -1380,13 +1380,33 @@ async function processFile(file) {
       sizeWarn.style.display = 'none';
     } catch(e) { hideLoading(); showToast('Error processing image: ' + e, true); }
   } else {
-    const mb = (file.size / 1024 / 1024).toFixed(1);
-    if (file.size > 15 * 1024 * 1024) {
-      sizeWarn.textContent = '⚠️ File is ' + mb + 'MB — very large files may exceed block gas limits. Try a smaller file (under 5MB).';
+    const mb = (file.size / 1024 / 1024).toFixed(2);
+    const MAX_VIDEO_MB = 1.2;
+    const MAX_OTHER_MB = 3;
+    const isVideo = currentMemType === 'video';
+    const maxMB = isVideo ? MAX_VIDEO_MB : MAX_OTHER_MB;
+
+    if (isVideo && file.size > MAX_VIDEO_MB * 1024 * 1024) {
+      sizeWarn.innerHTML = `❌ <strong>Video is too large (${mb}MB).</strong> Videos must be under ${MAX_VIDEO_MB}MB to store on-chain.<br><br>
+        <strong>How to fix:</strong> Trim your video to under 30 seconds, or export at a lower resolution (480p or lower). Short clips work great!`;
       sizeWarn.style.display = '';
-    } else if (file.size > 5 * 1024 * 1024) {
-      sizeWarn.textContent = '⚠️ File is ' + mb + 'MB — large file. Will cost more gas. Works best under 5MB.';
+      sizeWarn.style.color = 'var(--red)';
+      pendingFileDataURI = null;
+      preview.style.display = 'none';
+      return;
+    } else if (!isVideo && file.size > MAX_OTHER_MB * 1024 * 1024) {
+      sizeWarn.innerHTML = `❌ <strong>File is too large (${mb}MB).</strong> Files must be under ${MAX_OTHER_MB}MB to store on-chain.`;
       sizeWarn.style.display = '';
+      sizeWarn.style.color = 'var(--red)';
+      pendingFileDataURI = null;
+      preview.style.display = 'none';
+      return;
+    } else if (file.size > maxMB * 0.7 * 1024 * 1024) {
+      sizeWarn.innerHTML = `⚠️ File is ${mb}MB — storing this will cost a tiny bit more gas but should work fine.`;
+      sizeWarn.style.display = '';
+      sizeWarn.style.color = 'var(--gold)';
+    } else {
+      sizeWarn.style.display = 'none';
     }
     showLoading('Reading file…', 'Converting to blockchain format');
     const dataURI = await fileToDataURI(file);
