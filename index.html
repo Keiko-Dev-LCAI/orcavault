@@ -343,6 +343,22 @@ footer a{color:var(--gold);text-decoration:none}
   #btn-disconnect{padding:9px 14px;font-size:14px;white-space:nowrap;flex-shrink:0}
   .nav-wallet-addr{display:none !important}
 }
+
+/* ── CHAIN LINK BUTTONS ── */
+.chain-link-row{display:flex;align-items:center;gap:6px;padding:8px 14px;border-top:1px solid var(--border);flex-wrap:wrap}
+.chain-link-btn{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;padding:4px 10px;border-radius:7px;border:1px solid var(--border);background:transparent;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
+.chain-link-btn:hover{color:var(--gold);border-color:var(--gold)}
+.chunked-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;background:rgba(155,127,232,0.15);color:var(--purple);border:1px solid rgba(155,127,232,0.3)}
+.chunk-spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(232,184,75,.25);border-top-color:var(--gold);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+
+/* ── CHUNK UPLOAD PROGRESS OVERLAY ── */
+#chunk-progress-overlay{position:fixed;inset:0;background:rgba(13,11,24,.97);z-index:800;display:none;flex-direction:column;align-items:center;justify-content:center;gap:24px;padding:40px;text-align:center}
+.cp-bar-track{width:100%;max-width:520px;background:var(--bg3);border-radius:12px;overflow:hidden;height:14px;border:1px solid var(--border)}
+#cp-bar{height:100%;background:linear-gradient(90deg,var(--purple),var(--gold));border-radius:12px;width:0%;transition:width .5s ease}
+.cp-warning{font-size:16px;font-weight:700;color:var(--red);background:rgba(232,82,82,.08);border:1px solid rgba(232,82,82,.3);border-radius:10px;padding:12px 24px}
+
+/* ── SIZE ESTIMATE HINT ── */
+.chunk-hint{background:rgba(155,127,232,0.08);border:1px solid rgba(155,127,232,0.3);border-radius:10px;padding:10px 14px;font-size:14px;color:var(--purple);margin-top:8px;display:flex;align-items:center;gap:8px}
 </style>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#f59e0b">
@@ -785,7 +801,7 @@ footer a{color:var(--gold);text-decoration:none}
       <input class="form-input" id="mem-date" type="date">
     </div>
 
-    <div class="warn-banner">⛽ Lightchain transaction limit: videos &lt;78KB (use ffmpeg helper if too large), audio auto-compressed to fit, docs &lt;90KB, photos auto-compressed. Gas costs less than $0.001 per memory. Make sure you have LCAI in your wallet.</div>
+    <div class="warn-banner">⛽ <strong>Small files</strong> (&lt;90KB): stored in one transaction. <strong>Large files</strong>: stored in chunks via OrcaVault V2 (deploy V2 first). Videos &lt;78KB work without V2 — use ffmpeg helper for larger clips. Gas &lt;$0.001 per tx. Make sure you have LCAI in your wallet.</div>
 
     <div style="display:flex;gap:12px;margin-top:8px">
       <button class="btn btn-outline" onclick="goViewVaultCurrent()">← Cancel</button>
@@ -844,6 +860,32 @@ footer a{color:var(--gold);text-decoration:none}
       <div id="vm-media-container"></div>
     </div>
   </div>
+</div>
+
+<!-- ── CHUNK CONFIRM MODAL ── -->
+<div id="modal-chunk-confirm" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:520px">
+    <div style="font-size:48px;margin-bottom:12px;text-align:center">⛓️</div>
+    <div class="modal-title">Large File — Chunked Upload</div>
+    <div class="modal-sub">This file needs multiple blockchain transactions to store.</div>
+    <div id="chunk-confirm-info" style="background:rgba(232,184,75,0.08);border:1.5px solid var(--gold);border-radius:14px;padding:20px;margin:0 0 16px;font-size:18px;line-height:1.8;color:var(--text)"></div>
+    <p style="font-size:15px;color:var(--muted);margin-bottom:20px">Each chunk is a separate wallet transaction. Keep this tab open until all chunks are confirmed. You can cancel now but not mid-upload.</p>
+    <div style="display:flex;gap:12px">
+      <button class="btn btn-outline" onclick="cancelChunkUpload()" style="flex:1;justify-content:center">✕ Cancel</button>
+      <button class="btn btn-gold" id="btn-start-chunk" onclick="startChunkUpload()" style="flex:2;justify-content:center">🚀 Start Upload</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── CHUNK UPLOAD PROGRESS OVERLAY ── -->
+<div id="chunk-progress-overlay">
+  <div style="font-size:52px">⛓️</div>
+  <div style="font-size:22px;font-weight:800;color:var(--gold);max-width:600px;word-break:break-word" id="cp-filename"></div>
+  <div style="font-size:18px;color:var(--text);min-height:28px" id="cp-status">Preparing upload…</div>
+  <div class="cp-bar-track"><div id="cp-bar"></div></div>
+  <div style="font-size:18px;font-weight:700;color:var(--muted)" id="cp-pct">0%</div>
+  <div class="cp-warning">⚠️ Do not close this tab — upload in progress</div>
+  <div style="font-size:14px;color:var(--muted);max-width:500px;line-height:1.6">Each chunk is a separate Lightchain transaction. Your wallet will prompt you for each one. This is normal — approve each one to continue.</div>
 </div>
 
 <!-- ── LOADING OVERLAY ── -->
@@ -991,6 +1033,25 @@ const CHAIN_ID = 9200;
 const CHAIN_ID_HEX = '0x23F0';
 const BASE_URL = 'https://keiko-dev-lcai.github.io/orcavault/';
 
+// ── V2 CONFIG (set V2_CONTRACT_ADDRESS after deploying OrcaVaultV2.sol) ──
+const V2_CONTRACT_ADDRESS = '0xc871C3eA5A9a6ca65A61D0415360c1F54FD4c499'; // OrcaVault V2 — deployed 2026-06-04, chunked uploads, no file size limit
+const V2_ABI = [
+  "function createVault(string name, string template, string description) external returns (uint256)",
+  "function addMemory(uint256 vaultId, string memType, string title, string caption, string date, string dataURI) external",
+  "function initMemory(string title, string description, string mediaType, uint256 totalChunks, string template) external returns (uint256)",
+  "function addChunk(uint256 memoryId, uint256 chunkIndex, string chunkData) external",
+  "function getMemoryCount() view returns (uint256)",
+  "function getOwnerMemories(address) view returns (uint256[])",
+  "function vaults(uint256) view returns (address owner, string name, string template, string description, uint256 createdAt, bool exists)",
+  "function nextVaultId() view returns (uint256)",
+  "function vaultItemCount(uint256) view returns (uint256)",
+  "event VaultCreated(uint256 indexed vaultId, address indexed owner, string name, string template, string description, uint256 timestamp)",
+  "event MemoryAdded(uint256 indexed vaultId, uint256 indexed itemIndex, address indexed addedBy, string memType, string title, string caption, string date, string dataURI)",
+  "event MemoryCreated(uint256 indexed memoryId, address indexed owner, string title, string description, string mediaType, uint256 totalChunks, string template, uint256 timestamp)",
+  "event ChunkStored(uint256 indexed memoryId, uint256 indexed chunkIndex, uint256 totalChunks, string chunkData)"
+];
+const LIGHTSCAN_TX = 'https://lightscan.lightchain.ai/tx/';
+
 const ABI = [
   "function createVault(string name, string template, string description) external returns (uint256)",
   "function addMemory(uint256 vaultId, string memType, string title, string caption, string date, string dataURI) external",
@@ -1035,6 +1096,12 @@ let modalQRGenerated = false;
 let svQRGenerated    = false;
 let vmQRGenerated    = false;
 
+// ── V2 STATE ──
+let readContractV2   = null;   // read-only V2 contract
+let contractV2       = null;   // signer V2 contract
+let pendingChunkUpload = null; // { title, caption, date, dataURI, memType }
+const chunkCache     = new Map(); // memoryId (number) → assembled dataURI
+
 // ════════════════════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════════════════════
@@ -1057,6 +1124,9 @@ function initReadProvider() {
   try {
     readProvider = new ethers.JsonRpcProvider(RPC_URL);
     readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, readProvider);
+    if (V2_CONTRACT_ADDRESS) {
+      readContractV2 = new ethers.Contract(V2_CONTRACT_ADDRESS, V2_ABI, readProvider);
+    }
   } catch(e) { console.warn('Read provider init:', e); }
 }
 
@@ -1116,6 +1186,9 @@ async function connectWallet() {
     }
 
     contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    if (V2_CONTRACT_ADDRESS) {
+      contractV2 = new ethers.Contract(V2_CONTRACT_ADDRESS, V2_ABI, signer);
+    }
     hideLoading();
     updateNavWallet();
     updateRecoveryPanels();
@@ -1129,7 +1202,7 @@ async function connectWallet() {
 }
 
 function disconnectWallet() {
-  wallet = null; provider = null; signer = null; contract = null;
+  wallet = null; provider = null; signer = null; contract = null; contractV2 = null;
   const bc = document.getElementById('btn-connect'); if (bc) bc.style.display = '';
   document.getElementById('btn-disconnect').style.display = 'none';
   document.getElementById('btn-my-archives').style.display = 'none';
@@ -1367,19 +1440,67 @@ async function loadAndShowVault(vaultId) {
       document.getElementById('sv-add-btn-wrap').style.display = '';
     }
 
-    // Load memories
-    const filter = readContract.filters.MemoryAdded(vaultId);
-    const events = await readContract.queryFilter(filter, 0, 'latest');
-    currentMemories = events.map((e, i) => ({
-      idx:      Number(e.args[1]),
-      addedBy:  e.args[2],
-      memType:  e.args[3],
-      title:    e.args[4],
-      caption:  e.args[5],
-      date:     e.args[6],
-      dataURI:  e.args[7],
-    })).sort((a,b) => a.idx - b.idx);
+    // Load memories from V1 contract
+    const v1filter = readContract.filters.MemoryAdded(vaultId);
+    const v1events = await readContract.queryFilter(v1filter, 0, 'latest');
+    let allMems = v1events.map(e => ({
+      idx:        Number(e.args[1]),
+      addedBy:    e.args[2],
+      memType:    e.args[3],
+      title:      e.args[4],
+      caption:    e.args[5],
+      date:       e.args[6],
+      dataURI:    e.args[7],
+      txHash:     e.transactionHash,
+      _source:    'v1',
+      _isChunked: false,
+    }));
 
+    // Load memories from V2 contract (if deployed)
+    if (V2_CONTRACT_ADDRESS && readContractV2) {
+      try {
+        // V2 small-file memories (V1-compat vault-scoped)
+        const v2filter = readContractV2.filters.MemoryAdded(vaultId);
+        const v2events = await readContractV2.queryFilter(v2filter, 0, 'latest');
+        const v2Mems = v2events.map(e => ({
+          idx:        100000 + Number(e.args[1]),
+          addedBy:    e.args[2],
+          memType:    e.args[3],
+          title:      e.args[4],
+          caption:    e.args[5],
+          date:       e.args[6],
+          dataURI:    e.args[7],
+          txHash:     e.transactionHash,
+          _source:    'v2',
+          _isChunked: false,
+        }));
+        allMems = allMems.concat(v2Mems);
+
+        // V2 chunked memories (by vault owner address)
+        const ownerAddr = currentVaultData.owner;
+        const v2chunkFilter = readContractV2.filters.MemoryCreated(null, ownerAddr);
+        const v2chunkEvents = await readContractV2.queryFilter(v2chunkFilter, 0, 'latest');
+        const v2Chunked = v2chunkEvents.map(e => ({
+          idx:          200000 + Number(e.args[0]),
+          _memoryId:    Number(e.args[0]),
+          addedBy:      e.args[1],
+          memType:      e.args[4],
+          title:        e.args[2],
+          caption:      e.args[3],
+          date:         '',
+          dataURI:      null,
+          txHash:       e.transactionHash,
+          _source:      'v2chunked',
+          _isChunked:   true,
+          _totalChunks: Number(e.args[5]),
+        }));
+        allMems = allMems.concat(v2Chunked);
+      } catch(v2err) {
+        console.warn('V2 read error (non-fatal):', v2err);
+      }
+    }
+
+    currentMemories = allMems.sort((a, b) => a.idx - b.idx);
     document.getElementById('sv-count').textContent = currentMemories.length;
     hideLoading();
     updateRecoveryPanels();
@@ -1413,13 +1534,29 @@ function renderMemoriesGrid() {
       thumbHtml = `<div class="memory-thumb-placeholder">${icon}</div>`;
     }
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
+    // For chunked memories not yet assembled, show spinner thumb
+    let cardThumb = thumbHtml;
+    if (m._isChunked && !chunkCache.has(m._memoryId)) {
+      cardThumb = `<div class="memory-thumb-placeholder"><div class="chunk-spinner"></div></div>`;
+    } else if (m._isChunked && chunkCache.has(m._memoryId)) {
+      const cd = chunkCache.get(m._memoryId);
+      if (m.memType === 'photo' && cd && cd.startsWith('data:image')) {
+        cardThumb = `<img class="memory-thumb" src="${cd}" alt="${escHtml(m.title)}" loading="lazy">`;
+      }
+    }
+    const chainRow = m.txHash ? `<div class="chain-link-row">
+      <a class="chain-link-btn" href="${LIGHTSCAN_TX}${m.txHash}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔗 View on chain</a>
+      <button class="chain-link-btn" onclick="event.stopPropagation();copyTxHash('${m.txHash}')">📋</button>
+      ${m._isChunked ? `<span class="chunked-badge">⛓ ${m._totalChunks} chunks</span>` : ''}
+    </div>` : '';
     html += `<div class="memory-card" onclick="viewMemory(${m.idx})">
-      ${thumbHtml}
+      ${cardThumb}
       <div class="memory-card-body">
         <div class="memory-type-badge">${icon} ${capitalize(m.memType)}</div>
         <div class="memory-card-title">${escHtml(m.title)}</div>
         ${dateStr ? `<div class="memory-card-date">${dateStr}</div>` : ''}
       </div>
+      ${chainRow}
     </div>`;
   });
   html += `</div>`;
@@ -1442,7 +1579,7 @@ async function loadAndShowMemory(vaultId, idx) {
   try {
     let mem = currentMemories.find(m => m.idx === idx);
     if (!mem) {
-      // If not cached, fetch from chain
+      // If not cached, fetch from V1 chain
       if (!currentVaultData) {
         const vm = await readContract.vaults(vaultId);
         const tmplObj = TEMPLATES.find(t => t.name === vm.template) || {emoji:'⭐'};
@@ -1452,7 +1589,23 @@ async function loadAndShowMemory(vaultId, idx) {
       const events = await readContract.queryFilter(filter, 0, 'latest');
       if (events.length === 0) throw new Error('Memory not found on chain');
       const e = events[0];
-      mem = { idx: Number(e.args[1]), addedBy: e.args[2], memType: e.args[3], title: e.args[4], caption: e.args[5], date: e.args[6], dataURI: e.args[7] };
+      mem = { idx: Number(e.args[1]), addedBy: e.args[2], memType: e.args[3], title: e.args[4], caption: e.args[5], date: e.args[6], dataURI: e.args[7], txHash: e.transactionHash, _isChunked: false };
+    }
+
+    // Chunked reassembly
+    if (mem._isChunked && readContractV2) {
+      const memoryId = mem._memoryId;
+      if (chunkCache.has(memoryId)) {
+        mem = { ...mem, dataURI: chunkCache.get(memoryId) };
+      } else {
+        showLoading('Reassembling memory…', `Fetching ${mem._totalChunks} chunks from Lightchain — this may take a moment`);
+        const chunkFilter = readContractV2.filters.ChunkStored(memoryId);
+        const chunkEvents = await readContractV2.queryFilter(chunkFilter, 0, 'latest');
+        chunkEvents.sort((a, b) => Number(a.args[1]) - Number(b.args[1]));
+        const assembled = chunkEvents.map(e => e.args[3]).join('');
+        chunkCache.set(memoryId, assembled);
+        mem = { ...mem, dataURI: assembled };
+      }
     }
 
     const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄'};
@@ -1461,6 +1614,16 @@ async function loadAndShowMemory(vaultId, idx) {
     document.getElementById('vm-caption').textContent = mem.caption || '';
     document.getElementById('vm-date').textContent = mem.date ? new Date(mem.date).toLocaleDateString() : '—';
     document.getElementById('vm-addedby').textContent = shortAddr(mem.addedBy);
+    if (mem.txHash) {
+      const chainRow = document.getElementById('vm-chain-row');
+      const txLink   = document.getElementById('vm-tx-link');
+      const txCopy   = document.getElementById('vm-tx-copy');
+      if (chainRow && txLink) {
+        txLink.href = LIGHTSCAN_TX + mem.txHash;
+        txLink.dataset.hash = mem.txHash;
+        chainRow.style.display = '';
+      }
+    }
     document.getElementById('vm-breadcrumb-title').textContent = mem.title;
     if (currentVaultData) {
       document.getElementById('vm-vault-breadcrumb').textContent = currentVaultData.name;
@@ -1533,7 +1696,15 @@ async function loadMyArchives() {
   el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⏳</div><div class="empty-state-title">Loading…</div></div>`;
   try {
     const filter = readContract.filters.VaultCreated(null, wallet);
-    const events = await readContract.queryFilter(filter, 0, 'latest');
+    let events = await readContract.queryFilter(filter, 0, 'latest');
+    // Also fetch V2 vaults if deployed
+    if (V2_CONTRACT_ADDRESS && readContractV2) {
+      try {
+        const v2filter = readContractV2.filters.VaultCreated(null, wallet);
+        const v2events = await readContractV2.queryFilter(v2filter, 0, 'latest');
+        events = events.concat(v2events);
+      } catch(v2err) { console.warn('V2 vault read (non-fatal):', v2err); }
+    }
     if (events.length === 0) {
       el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">No archives yet</div><div class="empty-state-sub">You haven't created any archives. Start your first one!</div><button class="btn btn-gold" onclick="showScreen('create')" style="margin-top:8px">+ Create Archive</button></div>`;
       return;
@@ -1641,7 +1812,8 @@ async function processFile(file) {
       pendingFileDataURI = dataURI;
       hideLoading();
       const kb = Math.round(dataURI.length * 0.75 / 1024);
-      preview.innerHTML = `<img src="${dataURI}" style="max-width:100%;max-height:280px;border-radius:10px;display:block"><div style="font-size:13px;color:var(--muted);margin-top:8px">✅ Compressed: ~${kb} KB</div>`;
+      const bigHint = (dataURI.length > 90*1024 && V2_CONTRACT_ADDRESS) ? `<div class="chunk-hint">⛓️ ${getChunkHintText(dataURI.length)}</div>` : '';
+      preview.innerHTML = `<img src="${dataURI}" style="max-width:100%;max-height:280px;border-radius:10px;display:block"><div style="font-size:13px;color:var(--muted);margin-top:8px">✅ Compressed: ~${kb} KB</div>${bigHint}`;
       preview.style.display = '';
       sizeWarn.style.display = 'none';
     } catch(e) { hideLoading(); showToast('Error processing image: ' + e, true); }
@@ -1653,11 +1825,19 @@ async function processFile(file) {
     const isAudio = currentMemType === 'audio';
 
     if (isVideo && file.size > MAX_VIDEO_BYTES) {
-      // Show friendly helper dialog with ffmpeg command
-      showVideoTooBigDialog(file.name, kb);
-      pendingFileDataURI = null;
-      preview.style.display = 'none';
-      return;
+      if (V2_CONTRACT_ADDRESS) {
+        // V2 is deployed — allow chunked upload; show estimate hint
+        sizeWarn.innerHTML = getChunkHintHTML(file.size, 'video');
+        sizeWarn.style.display = '';
+        sizeWarn.style.color = '';
+        // Fall through to read the file
+      } else {
+        // V2 not yet deployed — show ffmpeg helper dialog
+        showVideoTooBigDialog(file.name, kb);
+        pendingFileDataURI = null;
+        preview.style.display = 'none';
+        return;
+      }
     } else if (isAudio && file.size > MAX_OTHER_BYTES) {
       // Auto-compress audio using Web Audio API
       sizeWarn.style.display = 'none';
@@ -1680,12 +1860,19 @@ async function processFile(file) {
       }
       return;
     } else if (!isVideo && !isAudio && file.size > MAX_OTHER_BYTES) {
-      sizeWarn.innerHTML = `❌ <strong>File is too large (${kb}KB).</strong> Documents must be under 90KB to store on Lightchain.`;
-      sizeWarn.style.display = '';
-      sizeWarn.style.color = 'var(--red)';
-      pendingFileDataURI = null;
-      preview.style.display = 'none';
-      return;
+      if (V2_CONTRACT_ADDRESS) {
+        sizeWarn.innerHTML = getChunkHintHTML(file.size, 'document');
+        sizeWarn.style.display = '';
+        sizeWarn.style.color = '';
+        // Fall through to read the file
+      } else {
+        sizeWarn.innerHTML = `❌ <strong>File is too large (${kb}KB).</strong> Documents must be under 90KB. Deploy OrcaVault V2 for unlimited file sizes.`;
+        sizeWarn.style.display = '';
+        sizeWarn.style.color = 'var(--red)';
+        pendingFileDataURI = null;
+        preview.style.display = 'none';
+        return;
+      }
     } else {
       sizeWarn.style.display = 'none';
     }
@@ -1722,6 +1909,47 @@ function acceptTerms() {
   pendingStoreAfterTerms = null;
 }
 
+// ════════════════════════════════════════════════════════
+//  UPLOAD ROUTING — single tx or chunked
+// ════════════════════════════════════════════════════════
+
+/** Returns chunk-estimate info for a given byte size */
+function estimateUpload(byteSize) {
+  const CHUNK_SIZE = 90 * 1024;
+  const chunks = Math.ceil(byteSize / CHUNK_SIZE);
+  const totalTx = 1 + chunks; // 1 initMemory + N addChunk
+  const totalSecs = totalTx * 3;
+  return {
+    chunks,
+    totalTx,
+    estimatedMinutes: Math.floor(totalSecs / 60),
+    estimatedSeconds: totalSecs % 60,
+  };
+}
+
+/** Split a base64 string into ≤90KB chunks */
+function chunkBase64(dataURI, chunkSize = 90 * 1024) {
+  const chunks = [];
+  for (let i = 0; i < dataURI.length; i += chunkSize) {
+    chunks.push(dataURI.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+/** Plain-text chunk hint (for inline use) */
+function getChunkHintText(byteSize) {
+  const { chunks, totalTx, estimatedMinutes, estimatedSeconds } = estimateUpload(byteSize);
+  const timeStr = estimatedMinutes > 0
+    ? `~${estimatedMinutes}m ${estimatedSeconds}s`
+    : `~${estimatedSeconds}s`;
+  return `Will upload in ${chunks} chunks (${totalTx} transactions) · Est. ${timeStr} · V2 chunked upload`;
+}
+
+/** HTML chunk hint banner */
+function getChunkHintHTML(byteSize, type) {
+  return `<div class="chunk-hint">⛓️ ${escHtml(getChunkHintText(byteSize))}</div>`;
+}
+
 async function storeMemory() {
   if (!contract) { showToast('Please connect your wallet', true); return; }
   const title = document.getElementById('mem-title').value.trim();
@@ -1748,9 +1976,47 @@ async function storeMemory() {
   const btn = document.getElementById('btn-store-memory');
   btn.disabled = true;
 
-  showLoading('Storing memory on Lightchain…', 'Confirm the transaction in your wallet. Large files may take up to a minute.');
+  // Route: chunked (V2) or single (V1/V2)
+  if (dataURI.length > 90 * 1024 && V2_CONTRACT_ADDRESS && contractV2) {
+    const { chunks, totalTx, estimatedMinutes, estimatedSeconds } = estimateUpload(dataURI.length);
+    const fileMB = (dataURI.length / 1024 / 1024).toFixed(2);
+    const timeStr = estimatedMinutes > 0
+      ? `~${estimatedMinutes}m ${estimatedSeconds}s`
+      : `~${estimatedSeconds}s`;
+    document.getElementById('chunk-confirm-info').innerHTML =
+      `<strong style="color:var(--gold);font-size:20px">${escHtml(title)}</strong><br>
+       <span style="color:var(--muted)">File size</span> <strong>${fileMB} MB</strong><br>
+       <span style="color:var(--muted)">Chunks</span> <strong>${chunks}</strong>
+       <span style="color:var(--muted);font-size:14px">(${totalTx} total transactions)</span><br>
+       <span style="color:var(--muted)">Estimated time</span> <strong>${timeStr}</strong>`;
+    pendingChunkUpload = { title, caption, date, dataURI, memType: currentMemType };
+    document.getElementById('modal-chunk-confirm').classList.remove('hidden');
+    btn.disabled = false;
+    return;
+  }
+
+  // Single-transaction path
+  await doSingleUpload(title, caption, date, dataURI, currentMemType, btn);
+}
+
+function cancelChunkUpload() {
+  document.getElementById('modal-chunk-confirm').classList.add('hidden');
+  pendingChunkUpload = null;
+  document.getElementById('btn-store-memory').disabled = false;
+}
+
+async function startChunkUpload() {
+  document.getElementById('modal-chunk-confirm').classList.add('hidden');
+  if (!pendingChunkUpload) return;
+  const { title, caption, date, dataURI, memType } = pendingChunkUpload;
+  pendingChunkUpload = null;
+  await doChunkedUpload(title, caption, date, dataURI, memType);
+}
+
+async function doSingleUpload(title, caption, date, dataURI, memType, btn) {
+  showLoading('Storing memory on Lightchain…', 'Confirm the transaction in your wallet.');
   try {
-    const tx = await contract.addMemory(currentVaultId, currentMemType, title, caption, date, dataURI);
+    const tx = await contract.addMemory(currentVaultId, memType, title, caption, date, dataURI);
     showLoading('Transaction submitted…', 'tx: ' + tx.hash.slice(0,10) + '… — waiting for confirmation');
     const receipt = await tx.wait();
 
@@ -1759,34 +2025,92 @@ async function storeMemory() {
       for (const log of receipt.logs) {
         try {
           const parsed = contract.interface.parseLog(log);
-          if (parsed && parsed.name === 'MemoryAdded') {
-            itemIdx = Number(parsed.args[1]);
-            break;
-          }
+          if (parsed && parsed.name === 'MemoryAdded') { itemIdx = Number(parsed.args[1]); break; }
         } catch(e) {}
       }
     }
 
     hideLoading();
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     updateRecoveryPanels();
-
-    // Reset form
-    document.getElementById('mem-title').value = '';
-    document.getElementById('mem-caption').value = '';
-    document.getElementById('mem-text-content').value = '';
-    document.getElementById('file-preview').style.display = 'none';
-    pendingFileDataURI = null;
+    resetAddMemoryForm();
 
     const shareUrl = itemIdx !== null ? getMemoryURL(currentVaultId, itemIdx) : getVaultURL(currentVaultId);
-    openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain. Share it with anyone!', shareUrl, () => {
+    openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain!', shareUrl, () => {
       loadAndShowVault(currentVaultId);
     });
   } catch(e) {
     hideLoading();
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     showToast('Transaction failed: ' + (e.reason || e.message || e), true);
   }
+}
+
+async function doChunkedUpload(title, caption, date, dataURI, memType) {
+  const overlay = document.getElementById('chunk-progress-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('cp-filename').textContent = title;
+  document.getElementById('cp-status').textContent = 'Initializing memory on chain…';
+  document.getElementById('cp-bar').style.width = '0%';
+  document.getElementById('cp-pct').textContent = '0%';
+
+  const chunks = chunkBase64(dataURI);
+  const totalChunks = chunks.length;
+  const tmplName = (currentVaultData && currentVaultData.template) ? currentVaultData.template : '';
+
+  let lastTxHash = '';
+  let memoryId = null;
+
+  try {
+    // Step 1 — initMemory
+    const initTx = await contractV2.initMemory(title, caption, memType, totalChunks, tmplName);
+    document.getElementById('cp-status').textContent = 'Confirming initMemory…';
+    const initReceipt = await initTx.wait();
+    for (const log of initReceipt.logs) {
+      try {
+        const parsed = contractV2.interface.parseLog(log);
+        if (parsed && parsed.name === 'MemoryCreated') { memoryId = Number(parsed.args[0]); break; }
+      } catch(e) {}
+    }
+    if (memoryId === null) throw new Error('MemoryCreated event not found');
+
+    // Step 2 — upload each chunk
+    for (let i = 0; i < totalChunks; i++) {
+      const pct = Math.round(((i + 1) / (totalChunks + 1)) * 100);
+      document.getElementById('cp-status').textContent = `Uploading chunk ${i + 1} of ${totalChunks}…`;
+      document.getElementById('cp-bar').style.width = pct + '%';
+      document.getElementById('cp-pct').textContent = pct + '%';
+
+      const chunkTx = await contractV2.addChunk(memoryId, i, chunks[i]);
+      const chunkReceipt = await chunkTx.wait();
+      lastTxHash = chunkReceipt.hash || chunkTx.hash;
+    }
+
+    document.getElementById('cp-bar').style.width = '100%';
+    document.getElementById('cp-pct').textContent = '100%';
+    document.getElementById('cp-status').textContent = '✅ All chunks stored!';
+    await new Promise(r => setTimeout(r, 1400));
+    overlay.style.display = 'none';
+
+    resetAddMemoryForm();
+    updateRecoveryPanels();
+    showToast(`✅ Stored in ${totalChunks} chunks! Memory ID: ${memoryId}`);
+    loadAndShowVault(currentVaultId);
+
+  } catch(e) {
+    overlay.style.display = 'none';
+    document.getElementById('btn-store-memory').disabled = false;
+    showToast('Chunked upload failed: ' + (e.reason || e.message || e), true);
+  }
+}
+
+function resetAddMemoryForm() {
+  document.getElementById('mem-title').value = '';
+  document.getElementById('mem-caption').value = '';
+  document.getElementById('mem-text-content').value = '';
+  document.getElementById('file-preview').style.display = 'none';
+  document.getElementById('size-warning').style.display = 'none';
+  pendingFileDataURI = null;
 }
 
 // ════════════════════════════════════════════════════════
@@ -2040,6 +2364,14 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
+
+// ── CHAIN LINK HELPERS ──
+function copyTxHash(hash) {
+  if (!hash) return;
+  navigator.clipboard.writeText(hash)
+    .then(() => showToast('Tx hash copied!'))
+    .catch(() => showToast('Copy failed', true));
+}
 </script>
 </body>
 </html>
