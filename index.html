@@ -85,6 +85,10 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .nav-btn-primary{background:var(--gold);color:#0d0b18}
 .nav-btn-primary:hover{opacity:.88}
 .nav-wallet-addr{font-size:13px;color:var(--muted);font-family:monospace;background:var(--bg3);padding:6px 12px;border-radius:8px;border:1px solid var(--border)}
+@media(max-width:599px){
+  .recovery-label{display:none}
+  .nav-btn-recovery{padding:10px 14px;font-size:18px;line-height:1}
+}
 
 /* ── SCREENS ── */
 .screen{display:none}
@@ -378,7 +382,7 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="nav-spacer"></div>
   <span id="nav-wallet-addr" class="nav-wallet-addr" style="display:none"></span>
   <button class="nav-btn nav-btn-outline" id="btn-my-archives" onclick="goMyArchives()" style="display:none">📂 My Archives</button>
-  <button class="nav-btn" style="background:rgba(232,184,75,0.15);border:1.5px solid var(--gold);color:var(--gold);font-weight:800" onclick="showScreen('recovery')">🔐 Recovery Info</button>
+  <button class="nav-btn nav-btn-recovery" style="background:rgba(232,184,75,0.15);border:1.5px solid var(--gold);color:var(--gold);font-weight:800" onclick="showScreen('recovery')">🔐<span class="recovery-label"> Recovery Info</span></button>
   <button class="nav-btn nav-btn-outline" id="btn-disconnect" onclick="disconnectWallet()" style="display:none">Disconnect</button>
 </nav>
 
