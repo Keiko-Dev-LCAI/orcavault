@@ -642,7 +642,7 @@ footer a{color:var(--gold);text-decoration:none}
       </div>
     </div>
 
-    <div class="warn-banner">⛽ Lightchain transaction limit: videos &lt;78KB, audio/docs &lt;90KB, photos auto-compressed. Gas costs less than $0.001 per memory. Make sure you have LCAI in your wallet.</div>
+    <div class="warn-banner">⛽ Lightchain transaction limit: videos &lt;78KB (use ffmpeg helper if too large), audio auto-compressed to fit, docs &lt;90KB, photos auto-compressed. Gas costs less than $0.001 per memory. Make sure you have LCAI in your wallet.</div>
 
     <div style="display:flex;gap:12px;margin-top:8px">
       <button class="btn btn-outline" onclick="goViewVaultCurrent()">← Cancel</button>
@@ -769,6 +769,33 @@ footer a{color:var(--gold);text-decoration:none}
       <input class="form-input" id="view-vault-input" type="text" placeholder="Archive ID (e.g. 42) or full URL">
     </div>
     <button class="btn btn-gold" style="width:100%;justify-content:center" onclick="goViewVaultFromInput()">🔍 View Archive</button>
+  </div>
+</div>
+
+<!-- ── VIDEO TOO BIG HELPER MODAL ── -->
+<div id="modal-video-toobig" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:600px">
+    <button class="modal-close" onclick="document.getElementById('modal-video-toobig').classList.add('hidden')">×</button>
+    <div style="font-size:44px;margin-bottom:12px;text-align:center">🎬</div>
+    <div class="modal-title" style="font-size:28px">Video Is Too Large</div>
+    <div style="font-size:20px;color:var(--muted);margin-bottom:20px" id="vtb-size-info"></div>
+    <div style="background:rgba(232,184,75,0.08);border:1.5px solid var(--gold);border-radius:14px;padding:22px;margin-bottom:24px">
+      <p style="font-size:20px;line-height:1.7;margin-bottom:12px">Videos must be <strong style="color:var(--gold)">under 78 KB</strong> to store on the Lightchain blockchain. This is a hard limit we cannot change — all data lives directly in the transaction, not on a server.</p>
+      <p style="font-size:20px;color:var(--muted);line-height:1.6">To store your video, you'll need to compress it on your computer first using a free tool called <strong style="color:var(--text)">ffmpeg</strong>.</p>
+    </div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:10px">📋 Compress your video — run this command:</div>
+    <div style="font-size:18px;color:var(--muted);margin-bottom:12px;line-height:1.5">Open <strong style="color:var(--text)">Terminal</strong> (Mac/Linux) or <strong style="color:var(--text)">Command Prompt</strong> (Windows), then paste and run:</div>
+    <div style="position:relative">
+      <pre id="vtb-ffmpeg-cmd" style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:18px;padding-right:120px;font-family:monospace;font-size:15px;color:var(--green);overflow-x:auto;white-space:pre-wrap;word-break:break-all;line-height:1.8;margin:0"></pre>
+      <button id="vtb-copy-btn" onclick="copyVideoCommand()" style="position:absolute;top:12px;right:12px;background:var(--gold);color:#0d0b18;border:none;border-radius:8px;padding:9px 16px;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">📋 Copy</button>
+    </div>
+    <div style="font-size:18px;color:var(--muted);margin-top:18px;line-height:1.6;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px">
+      💡 <strong style="color:var(--text)">What this does:</strong> makes a silent 5-second clip at 240p — tiny enough for the blockchain. After running it, upload the new <strong style="color:var(--green)">output_small.mp4</strong> file here.<br><br>
+      <span style="color:var(--muted);font-size:16px">Don't have ffmpeg? Download it free at <strong style="color:var(--text)">ffmpeg.org</strong></span>
+    </div>
+    <div style="margin-top:24px">
+      <button class="btn btn-outline" style="width:100%;justify-content:center" onclick="document.getElementById('modal-video-toobig').classList.add('hidden')">← Try a Different File</button>
+    </div>
   </div>
 </div>
 
@@ -1344,7 +1371,7 @@ function selectMemType(btn, type) {
     } else if (type === 'audio') {
       uploadLabel.textContent = 'Upload Audio';
       uzIcon.textContent = '🎵'; uzText.textContent = 'Click or drag & drop an audio file';
-      uzSub.textContent = '⚠️ Max 90KB · MP3, WAV, OGG, M4A';
+      uzSub.textContent = '🔄 Auto-compressed to fit if needed · MP3, WAV, OGG, M4A · max ~90KB stored';
       fileInput.accept = 'audio/*';
     } else if (type === 'document') {
       uploadLabel.textContent = 'Upload Document';
@@ -1388,16 +1415,37 @@ async function processFile(file) {
     const MAX_VIDEO_BYTES = 78 * 1024;   // 78KB
     const MAX_OTHER_BYTES = 90 * 1024;   // 90KB
     const isVideo = currentMemType === 'video';
+    const isAudio = currentMemType === 'audio';
 
     if (isVideo && file.size > MAX_VIDEO_BYTES) {
-      sizeWarn.innerHTML = `❌ <strong>Video is too large (${kb}KB).</strong> Videos must be under 78KB on Lightchain. Use a short clip (5–10 sec) at 240p resolution. We can help you compress it.`;
-      sizeWarn.style.display = '';
-      sizeWarn.style.color = 'var(--red)';
+      // Show friendly helper dialog with ffmpeg command
+      showVideoTooBigDialog(file.name, kb);
       pendingFileDataURI = null;
       preview.style.display = 'none';
       return;
-    } else if (!isVideo && file.size > MAX_OTHER_BYTES) {
-      sizeWarn.innerHTML = `❌ <strong>File is too large (${kb}KB).</strong> ${currentMemType === 'audio' ? 'Audio files' : 'Documents'} must be under 90KB to store on Lightchain.`;
+    } else if (isAudio && file.size > MAX_OTHER_BYTES) {
+      // Auto-compress audio using Web Audio API
+      sizeWarn.style.display = 'none';
+      showLoading('Compressing audio…', 'Downsampling for blockchain storage — this may take a moment');
+      try {
+        const dataURI = await compressAudio(file);
+        pendingFileDataURI = dataURI;
+        hideLoading();
+        const compressedKb = Math.round(dataURI.length * 0.75 / 1024);
+        preview.innerHTML = `<audio src="${dataURI}" controls style="width:100%"></audio><div style="font-size:13px;color:var(--green);margin-top:8px">✅ Compressed: ${kb}KB → ~${compressedKb}KB and ready to store</div>`;
+        preview.style.display = '';
+        sizeWarn.style.display = 'none';
+      } catch(err) {
+        hideLoading();
+        sizeWarn.innerHTML = `❌ <strong>Cannot compress audio small enough.</strong> ${escHtml(err.message || 'The file is too long to fit under 90KB.')} Please use a shorter clip (under ~30 seconds).`;
+        sizeWarn.style.display = '';
+        sizeWarn.style.color = 'var(--red)';
+        pendingFileDataURI = null;
+        preview.style.display = 'none';
+      }
+      return;
+    } else if (!isVideo && !isAudio && file.size > MAX_OTHER_BYTES) {
+      sizeWarn.innerHTML = `❌ <strong>File is too large (${kb}KB).</strong> Documents must be under 90KB to store on Lightchain.`;
       sizeWarn.style.display = '';
       sizeWarn.style.color = 'var(--red)';
       pendingFileDataURI = null;
@@ -1540,6 +1588,111 @@ function fileToDataURI(file) {
     reader.onload = (e) => resolve(e.target.result);
     reader.readAsDataURL(file);
   });
+}
+
+// ── AUDIO COMPRESSION (Web Audio API) ──
+async function compressAudio(file) {
+  const TARGET_BYTES = 90 * 1024; // 90KB raw audio target
+
+  // Read file as ArrayBuffer
+  const arrayBuffer = await file.arrayBuffer();
+
+  // Decode audio
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let audioBuffer;
+  try {
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  } finally {
+    try { audioCtx.close(); } catch(e) {}
+  }
+
+  const duration = audioBuffer.duration;
+
+  // WAV bytes = sampleRate × 2 (16-bit mono) × duration + 44 (header)
+  // Solve for max sampleRate that fits in TARGET_BYTES
+  let targetSampleRate = Math.floor((TARGET_BYTES - 44) / (2 * duration));
+
+  if (targetSampleRate < 4000) {
+    const maxSecs = Math.floor((TARGET_BYTES - 44) / (2 * 4000));
+    throw new Error(`Audio is ${Math.round(duration)}s long — too long to compress below 90KB. Use a clip under ${maxSecs}s.`);
+  }
+  // Cap at 22050Hz (AM radio quality — good enough for voice/short clips)
+  targetSampleRate = Math.min(22050, Math.max(4000, targetSampleRate));
+
+  // Render to offline context at target sample rate (mono)
+  const frameCount = Math.ceil(targetSampleRate * duration);
+  const offlineCtx = new OfflineAudioContext(1, frameCount, targetSampleRate);
+  const source = offlineCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(offlineCtx.destination);
+  source.start(0);
+  const renderedBuffer = await offlineCtx.startRendering();
+
+  // Encode as 16-bit mono WAV
+  const wavData = audioBufferToWav(renderedBuffer);
+
+  if (wavData.byteLength > TARGET_BYTES) {
+    throw new Error(`Even at lowest quality the audio is ${Math.round(wavData.byteLength/1024)}KB. Please use a shorter clip.`);
+  }
+
+  // Convert WAV ArrayBuffer → data URI via Blob + FileReader
+  const blob = new Blob([wavData], { type: 'audio/wav' });
+  return await fileToDataURI(blob);
+}
+
+function audioBufferToWav(buffer) {
+  const sampleRate = buffer.sampleRate;
+  const samples = buffer.getChannelData(0); // mono: channel 0
+  const numSamples = samples.length;
+  const wavBuffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(wavBuffer);
+
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  // RIFF header
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeStr(8, 'WAVE');
+  // fmt chunk
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);         // chunk size
+  view.setUint16(20, 1, true);          // PCM format
+  view.setUint16(22, 1, true);          // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true);          // block align
+  view.setUint16(34, 16, true);         // 16-bit
+  // data chunk
+  writeStr(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+  // PCM samples
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, Math.round(s * 32767), true);
+    offset += 2;
+  }
+  return wavBuffer;
+}
+
+// ── VIDEO TOO-BIG DIALOG ──
+function showVideoTooBigDialog(filename, kb) {
+  const baseName = (filename || 'your-video.mp4').replace(/.*[\/\\]/, '');
+  const cmd = `ffmpeg -i "${baseName}" -vf "scale=240:-2" -c:v libx264 -crf 40 -an -t 5 output_small.mp4`;
+  document.getElementById('vtb-size-info').textContent = `Your file is ${kb} KB — the Lightchain limit is 78 KB.`;
+  document.getElementById('vtb-ffmpeg-cmd').textContent = cmd;
+  document.getElementById('modal-video-toobig').classList.remove('hidden');
+}
+
+function copyVideoCommand() {
+  const cmd = document.getElementById('vtb-ffmpeg-cmd').textContent;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = document.getElementById('vtb-copy-btn');
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
+  }).catch(() => showToast('Copy failed', true));
 }
 
 // ════════════════════════════════════════════════════════
