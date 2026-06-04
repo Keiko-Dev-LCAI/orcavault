@@ -705,6 +705,31 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="loading-sub" id="loading-sub">Please wait</div>
 </div>
 
+<!-- ── TERMS OF USE MODAL ── -->
+<div id="modal-terms" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:580px">
+    <div style="font-size:44px;margin-bottom:12px;text-align:center">⚖️</div>
+    <div class="modal-title" style="font-size:24px">Terms of Use</div>
+    <div style="background:rgba(232,184,75,0.08);border:2px solid var(--gold);border-radius:12px;padding:20px;margin:16px 0;font-size:16px;line-height:1.7;color:var(--text)">
+      <p style="margin-bottom:14px">Audio &amp; Visual Archives is a <strong>decentralized interface</strong> to the Lightchain blockchain. The developer does not host, store, or control any content uploaded through this app.</p>
+      <p style="margin-bottom:14px"><strong style="color:var(--red)">The following content is strictly prohibited:</strong></p>
+      <ul style="padding-left:20px;margin-bottom:14px">
+        <li style="margin-bottom:6px">Child sexual abuse material (CSAM) or any content involving the exploitation of minors</li>
+        <li style="margin-bottom:6px">Content that is illegal under applicable law</li>
+        <li style="margin-bottom:6px">Copyrighted material you do not have rights to share</li>
+        <li style="margin-bottom:6px">Content intended to harass, threaten, or harm others</li>
+      </ul>
+      <p style="margin-bottom:14px"><strong>All uploads are permanent and public.</strong> Your wallet address is permanently linked to everything you store. There is no way to delete content from the blockchain.</p>
+      <p style="color:var(--muted);font-size:14px">By using this app you accept sole responsibility for all content you upload. The developer of Audio &amp; Visual Archives bears no liability for user-submitted content.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <input type="checkbox" id="terms-check" style="width:20px;height:20px;cursor:pointer" onchange="document.getElementById('terms-confirm-btn').disabled=!this.checked">
+      <label for="terms-check" style="font-size:16px;cursor:pointer;line-height:1.5">I have read and agree to these terms. I will not upload any illegal content.</label>
+    </div>
+    <button class="btn btn-gold" id="terms-confirm-btn" disabled onclick="acceptTerms()" style="width:100%;justify-content:center;font-size:18px;padding:14px">I Agree — Continue</button>
+  </div>
+</div>
+
 <!-- ── SUCCESS SHARE MODAL ── -->
 <div id="modal-share" class="modal-overlay hidden">
   <div class="modal-box">
@@ -1379,6 +1404,24 @@ async function processFile(file) {
   }
 }
 
+// ── TERMS OF USE ──
+let termsAccepted = false;
+let pendingStoreAfterTerms = false;
+
+function showTermsModal(onAccept) {
+  pendingStoreAfterTerms = onAccept;
+  document.getElementById('terms-check').checked = false;
+  document.getElementById('terms-confirm-btn').disabled = true;
+  document.getElementById('modal-terms').classList.remove('hidden');
+}
+
+function acceptTerms() {
+  termsAccepted = true;
+  document.getElementById('modal-terms').classList.add('hidden');
+  if (pendingStoreAfterTerms) pendingStoreAfterTerms();
+  pendingStoreAfterTerms = null;
+}
+
 async function storeMemory() {
   if (!contract) { showToast('Please connect your wallet', true); return; }
   const title = document.getElementById('mem-title').value.trim();
@@ -1392,6 +1435,12 @@ async function storeMemory() {
   } else {
     if (!pendingFileDataURI) { showToast('Please upload a file first', true); return; }
     dataURI = pendingFileDataURI;
+  }
+
+  // Show terms on first upload
+  if (!termsAccepted) {
+    showTermsModal(() => storeMemory());
+    return;
   }
 
   const caption = document.getElementById('mem-caption').value.trim();
