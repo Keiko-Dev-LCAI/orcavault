@@ -1,0 +1,1626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio & Visual Archives — Your Memories, On-Chain Forever</title>
+<!--
+╔══════════════════════════════════════════════════════════════════╗
+║           AUDIO & VISUAL ARCHIVES — SOLIDITY CONTRACT            ║
+║   Deploy at: https://deploy.lightchain.ai                        ║
+║   Network: Lightchain AI Mainnet  |  Chain ID: 9200              ║
+║   RPC: https://rpc.mainnet.lightchain.ai                         ║
+╚══════════════════════════════════════════════════════════════════╝
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract AudioVisualArchives {
+    struct VaultMeta {
+        address owner;
+        string name;
+        string template;
+        string description;
+        uint256 createdAt;
+        bool exists;
+    }
+    mapping(uint256 => VaultMeta) public vaults;
+    uint256 public nextVaultId = 1;
+    mapping(uint256 => uint256) public vaultItemCount;
+
+    event VaultCreated(uint256 indexed vaultId, address indexed owner, string name, string template, string description, uint256 timestamp);
+    event MemoryAdded(uint256 indexed vaultId, uint256 indexed itemIndex, address indexed addedBy, string memType, string title, string caption, string date, string dataURI);
+
+    function createVault(string memory name, string memory template, string memory description) external returns (uint256) {
+        uint256 id = nextVaultId++;
+        vaults[id] = VaultMeta(msg.sender, name, template, description, block.timestamp, true);
+        emit VaultCreated(id, msg.sender, name, template, description, block.timestamp);
+        return id;
+    }
+
+    function addMemory(uint256 vaultId, string memory memType, string memory title, string memory caption, string memory date, string memory dataURI) external {
+        require(vaults[vaultId].exists, "Vault not found");
+        require(vaults[vaultId].owner == msg.sender, "Not vault owner");
+        uint256 idx = vaultItemCount[vaultId]++;
+        emit MemoryAdded(vaultId, idx, msg.sender, memType, title, caption, date, dataURI);
+    }
+}
+-->
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+:root {
+  --bg:       #0d0b18;
+  --bg2:      #141124;
+  --bg3:      #1c1930;
+  --bg4:      #232040;
+  --border:   #2d2a4a;
+  --gold:     #e8b84b;
+  --gold-dim: rgba(232,184,75,0.14);
+  --purple:   #9b7fe8;
+  --purple-dim: rgba(155,127,232,0.14);
+  --green:    #52c97f;
+  --red:      #e85252;
+  --text:     #f0ece4;
+  --muted:    #8880a8;
+  --sidebar:  300px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:18px;line-height:1.6;min-height:100vh;overflow-x:hidden}
+
+/* ── ORCA POD STRIP ── */
+#orca-strip{background:#0a0916;border-bottom:1px solid var(--border);padding:0 16px;display:flex;align-items:center;gap:0;overflow-x:auto;scrollbar-width:none;height:44px;flex-shrink:0}
+#orca-strip::-webkit-scrollbar{display:none}
+.strip-label{font-size:12px;font-weight:700;color:var(--muted);white-space:nowrap;padding-right:12px;border-right:1px solid var(--border);margin-right:4px;flex-shrink:0}
+.strip-app{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;text-decoration:none;color:var(--muted);font-size:12px;font-weight:600;white-space:nowrap;transition:all .15s;flex-shrink:0}
+.strip-app:hover{color:var(--text);background:rgba(255,255,255,0.06)}
+.strip-app.active{color:var(--gold);background:var(--gold-dim)}
+
+/* ── NAV ── */
+#app-nav{background:rgba(13,11,24,0.95);border-bottom:1px solid var(--border);padding:0 28px;display:flex;align-items:center;gap:20px;height:68px;position:sticky;top:0;z-index:200;backdrop-filter:blur(12px)}
+.nav-logo{display:flex;align-items:center;gap:12px;text-decoration:none;flex-shrink:0}
+.nav-logo-icon{font-size:28px}
+.nav-logo-text{font-size:20px;font-weight:800;color:var(--gold);letter-spacing:-0.3px;white-space:nowrap}
+.nav-logo-sub{font-size:11px;color:var(--muted);font-weight:500;letter-spacing:.04em}
+.nav-spacer{flex:1}
+.nav-btn{padding:10px 22px;border-radius:10px;border:none;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit}
+.nav-btn-outline{background:transparent;border:1.5px solid var(--border);color:var(--muted)}
+.nav-btn-outline:hover{border-color:var(--gold);color:var(--gold)}
+.nav-btn-primary{background:var(--gold);color:#0d0b18}
+.nav-btn-primary:hover{opacity:.88}
+.nav-wallet-addr{font-size:13px;color:var(--muted);font-family:monospace;background:var(--bg3);padding:6px 12px;border-radius:8px;border:1px solid var(--border)}
+
+/* ── SCREENS ── */
+.screen{display:none}
+.screen.active{display:block}
+
+/* ── LAYOUT (sidebar + main) ── */
+.layout-with-sidebar{display:flex;min-height:calc(100vh - 112px)}
+.app-sidebar{width:var(--sidebar);flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);padding:28px 20px;position:sticky;top:112px;height:calc(100vh - 112px);overflow-y:auto}
+.app-main{flex:1;padding:36px 40px;overflow-x:hidden}
+
+/* ── LANDING ── */
+.hero{padding:70px 56px 50px;background:linear-gradient(160deg,#120e28 0%,#0d0b18 60%,#180d24 100%)}
+.hero-eyebrow{font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--purple);margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.hero-title{font-size:clamp(36px,5vw,64px);font-weight:900;line-height:1.1;color:var(--text);margin-bottom:20px;letter-spacing:-1px}
+.hero-title span{color:var(--gold)}
+.hero-tagline{font-size:clamp(18px,2.5vw,24px);color:var(--muted);margin-bottom:40px;max-width:640px;line-height:1.5}
+.hero-ctas{display:flex;gap:14px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 30px;border-radius:12px;border:none;font-size:17px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-decoration:none;white-space:nowrap}
+.btn-gold{background:var(--gold);color:#0d0b18}
+.btn-gold:hover{opacity:.88;transform:translateY(-1px)}
+.btn-outline{background:transparent;border:2px solid var(--border);color:var(--text)}
+.btn-outline:hover{border-color:var(--gold);color:var(--gold)}
+.btn-sm{padding:10px 20px;font-size:15px;border-radius:9px}
+.btn-purple{background:var(--purple);color:#fff}
+.btn-purple:hover{opacity:.88}
+.btn-green{background:var(--green);color:#0d0b18}
+.btn-green:hover{opacity:.88}
+.btn-red{background:var(--red);color:#fff}
+
+/* ── SECTION ── */
+.section{padding:50px 56px}
+.section-alt{background:var(--bg2)}
+.section-title{font-size:28px;font-weight:800;margin-bottom:8px}
+.section-sub{font-size:17px;color:var(--muted);margin-bottom:32px}
+
+/* ── TEMPLATE CARDS ── */
+.template-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
+.template-card{background:var(--bg3);border:2px solid var(--border);border-radius:16px;padding:28px 22px;cursor:pointer;transition:all .2s;text-align:left}
+.template-card:hover,.template-card.selected{border-color:var(--gold);background:var(--gold-dim);transform:translateY(-2px)}
+.tmpl-emoji{font-size:36px;margin-bottom:12px;display:block}
+.tmpl-name{font-size:18px;font-weight:800;margin-bottom:6px;color:var(--text)}
+.tmpl-desc{font-size:14px;color:var(--muted);line-height:1.5}
+
+/* ── CARDS ── */
+.card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;padding:24px}
+.card+.card{margin-top:14px}
+
+/* ── VAULT GRID (my archives) ── */
+.vault-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px}
+.vault-card{background:var(--bg3);border:1px solid var(--border);border-radius:16px;padding:24px;cursor:pointer;transition:all .2s;text-decoration:none;display:block}
+.vault-card:hover{border-color:var(--gold);transform:translateY(-2px)}
+.vault-card-emoji{font-size:30px;margin-bottom:10px}
+.vault-card-name{font-size:20px;font-weight:800;color:var(--text);margin-bottom:4px}
+.vault-card-template{font-size:13px;color:var(--purple);font-weight:600;margin-bottom:8px}
+.vault-card-desc{font-size:14px;color:var(--muted);line-height:1.5;margin-bottom:12px}
+.vault-card-meta{font-size:13px;color:var(--muted);display:flex;gap:16px}
+
+/* ── MEMORY GRID ── */
+.memory-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
+.memory-card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer;transition:all .2s}
+.memory-card:hover{border-color:var(--gold);transform:translateY(-2px)}
+.memory-thumb{width:100%;height:180px;object-fit:cover;display:block;background:var(--bg4)}
+.memory-thumb-placeholder{width:100%;height:180px;display:flex;align-items:center;justify-content:center;font-size:48px;background:var(--bg4)}
+.memory-card-body{padding:14px}
+.memory-type-badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:8px;margin-bottom:8px;background:var(--purple-dim);color:var(--purple);border:1px solid rgba(155,127,232,.3)}
+.memory-card-title{font-size:16px;font-weight:700;margin-bottom:4px;color:var(--text)}
+.memory-card-date{font-size:13px;color:var(--muted)}
+
+/* ── SIDEBAR COMPONENTS ── */
+.sidebar-section{margin-bottom:28px}
+.sidebar-section-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px}
+.sidebar-vault-name{font-size:22px;font-weight:800;color:var(--text);margin-bottom:4px}
+.sidebar-template-badge{display:inline-block;font-size:13px;font-weight:600;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(232,184,75,.3);padding:4px 12px;border-radius:8px;margin-bottom:12px}
+.sidebar-desc{font-size:15px;color:var(--muted);line-height:1.6}
+.stat-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}
+.stat-row:last-child{border-bottom:none}
+.stat-label{font-size:14px;color:var(--muted)}
+.stat-val{font-size:16px;font-weight:700;color:var(--text)}
+.owner-tag{font-family:monospace;font-size:12px;color:var(--purple);background:var(--purple-dim);padding:4px 8px;border-radius:6px;word-break:break-all;display:block;margin-top:4px}
+
+/* ── SHARE BOX ── */
+.share-box{background:var(--bg4);border:1px solid var(--border);border-radius:12px;padding:18px}
+.share-url-row{display:flex;gap:8px;margin-bottom:12px}
+.share-url-input{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;font-family:monospace;outline:none;min-width:0}
+.share-url-input:focus{border-color:var(--gold)}
+.share-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.share-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border-radius:9px;border:1.5px solid var(--border);background:transparent;color:var(--text);font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-decoration:none}
+.share-btn:hover{transform:translateY(-1px)}
+.share-btn-whatsapp{border-color:#25D366;color:#25D366}
+.share-btn-whatsapp:hover{background:rgba(37,211,102,.1)}
+.share-btn-twitter{border-color:#1DA1F2;color:#1DA1F2}
+.share-btn-twitter:hover{background:rgba(29,161,242,.1)}
+.share-btn-facebook{border-color:#1877F2;color:#1877F2}
+.share-btn-facebook:hover{background:rgba(24,119,242,.1)}
+.share-btn-email{border-color:var(--purple);color:var(--purple)}
+.share-btn-email:hover{background:var(--purple-dim)}
+.share-qr{display:flex;justify-content:center;margin-top:14px;padding:12px;background:#fff;border-radius:10px}
+
+/* ── FORM ELEMENTS ── */
+.form-group{margin-bottom:22px}
+.form-label{display:block;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px}
+.form-sublabel{font-size:13px;color:var(--muted);margin-bottom:8px;display:block}
+.form-input,.form-textarea,.form-select{width:100%;background:var(--bg3);border:1.5px solid var(--border);border-radius:10px;padding:14px 16px;color:var(--text);font-size:17px;font-family:inherit;outline:none;transition:border-color .15s}
+.form-input:focus,.form-textarea:focus,.form-select:focus{border-color:var(--gold)}
+.form-input::placeholder,.form-textarea::placeholder{color:var(--muted)}
+.form-textarea{resize:vertical;min-height:100px}
+.form-select option{background:var(--bg3)}
+.upload-zone{border:2px dashed var(--border);border-radius:12px;padding:40px 24px;text-align:center;cursor:pointer;transition:all .2s;background:var(--bg3)}
+.upload-zone:hover,.upload-zone.drag-over{border-color:var(--gold);background:var(--gold-dim)}
+.upload-zone-icon{font-size:48px;margin-bottom:12px}
+.upload-zone-text{font-size:17px;font-weight:600;color:var(--text);margin-bottom:6px}
+.upload-zone-sub{font-size:14px;color:var(--muted)}
+input[type=file]{display:none}
+
+/* ── MEMORY TYPE PICKER ── */
+.type-picker{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:24px}
+.type-btn{background:var(--bg3);border:2px solid var(--border);border-radius:12px;padding:16px 8px;cursor:pointer;text-align:center;transition:all .15s;font-family:inherit}
+.type-btn:hover,.type-btn.active{border-color:var(--gold);background:var(--gold-dim)}
+.type-btn-icon{font-size:28px;margin-bottom:6px;display:block}
+.type-btn-label{font-size:13px;font-weight:700;color:var(--text)}
+
+/* ── FULL MEMORY VIEW ── */
+.memory-full-media{width:100%;max-height:70vh;object-fit:contain;border-radius:12px;background:var(--bg3);display:block}
+.memory-full-audio{width:100%;margin-top:20px}
+.memory-text-content{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:28px;font-size:18px;line-height:1.8;white-space:pre-wrap}
+.memory-meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}
+.memory-meta-item{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
+.memory-meta-key{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px}
+.memory-meta-val{font-size:17px;font-weight:600;color:var(--text)}
+
+/* ── MODAL ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(6px)}
+.modal-overlay.hidden{display:none}
+.modal-box{background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:36px;max-width:520px;width:100%;max-height:90vh;overflow-y:auto;position:relative}
+.modal-close{position:absolute;top:16px;right:18px;background:none;border:none;color:var(--muted);font-size:24px;cursor:pointer;line-height:1;transition:color .15s}
+.modal-close:hover{color:var(--text)}
+.modal-title{font-size:24px;font-weight:800;margin-bottom:8px}
+.modal-sub{font-size:16px;color:var(--muted);margin-bottom:24px}
+
+/* ── LOADING OVERLAY ── */
+#loading-overlay{position:fixed;inset:0;background:rgba(13,11,24,.92);z-index:600;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
+#loading-overlay.hidden{display:none}
+.spinner{width:52px;height:52px;border:4px solid rgba(232,184,75,.2);border-top-color:var(--gold);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{font-size:18px;color:var(--muted)}
+.loading-sub{font-size:14px;color:var(--muted);opacity:.7}
+
+/* ── TOAST ── */
+#toast{position:fixed;bottom:28px;right:28px;background:var(--bg3);border:1px solid var(--green);border-radius:12px;padding:14px 22px;font-size:15px;font-weight:600;color:var(--green);z-index:700;transform:translateY(80px);opacity:0;transition:all .3s;max-width:340px}
+#toast.show{transform:translateY(0);opacity:1}
+#toast.error{border-color:var(--red);color:var(--red)}
+
+/* ── EMPTY STATES ── */
+.empty-state{text-align:center;padding:80px 40px}
+.empty-state-icon{font-size:64px;margin-bottom:16px}
+.empty-state-title{font-size:24px;font-weight:800;margin-bottom:8px}
+.empty-state-sub{font-size:17px;color:var(--muted);margin-bottom:28px}
+
+/* ── BREADCRUMB ── */
+.breadcrumb{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);margin-bottom:24px}
+.breadcrumb a{color:var(--gold);text-decoration:none;font-weight:600}
+.breadcrumb a:hover{text-decoration:underline}
+.breadcrumb-sep{color:var(--border)}
+
+/* ── HOW IT WORKS ── */
+.how-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:20px}
+.how-card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;padding:28px 22px;text-align:center}
+.how-num{width:40px;height:40px;border-radius:50%;background:var(--gold-dim);border:2px solid var(--gold);color:var(--gold);font-size:18px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 14px}
+.how-title{font-size:17px;font-weight:800;margin-bottom:6px}
+.how-desc{font-size:14px;color:var(--muted);line-height:1.55}
+
+/* ── FOOTER ── */
+footer{background:#0a0916;border-top:1px solid var(--border);padding:28px 40px;text-align:center;font-size:14px;color:var(--muted)}
+footer a{color:var(--gold);text-decoration:none}
+
+/* ── SUCCESS BANNER ── */
+.success-banner{background:rgba(82,201,127,.08);border:1.5px solid rgba(82,201,127,.35);border-radius:14px;padding:22px 24px;margin-bottom:24px;display:flex;align-items:flex-start;gap:14px}
+.success-banner-icon{font-size:28px;flex-shrink:0}
+.success-banner-title{font-size:18px;font-weight:800;color:var(--green);margin-bottom:4px}
+.success-banner-sub{font-size:15px;color:var(--muted)}
+.warn-banner{background:rgba(232,184,75,.07);border:1.5px solid rgba(232,184,75,.3);border-radius:12px;padding:14px 18px;font-size:14px;color:rgba(232,184,75,.9);margin-bottom:18px}
+
+/* ── STEP INDICATOR ── */
+.step-indicator{display:flex;align-items:center;gap:0;margin-bottom:36px}
+.step{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;color:var(--muted)}
+.step.active{color:var(--gold)}
+.step.done{color:var(--green)}
+.step-circle{width:32px;height:32px;border-radius:50%;border:2px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0}
+.step-line{flex:1;height:2px;background:var(--border);margin:0 10px;min-width:20px}
+
+/* ── RESPONSIVE ── */
+@media(max-width:900px){
+  .layout-with-sidebar{flex-direction:column}
+  .app-sidebar{width:100%;position:static;height:auto;border-right:none;border-bottom:1px solid var(--border)}
+  .app-main{padding:24px 20px}
+  .hero{padding:40px 20px 36px}
+  .section{padding:36px 20px}
+  .type-picker{grid-template-columns:repeat(3,1fr)}
+  .memory-meta-grid{grid-template-columns:1fr}
+}
+@media(max-width:600px){
+  .template-grid{grid-template-columns:1fr 1fr}
+  .memory-grid{grid-template-columns:1fr 1fr}
+  .type-picker{grid-template-columns:repeat(3,1fr)}
+  .share-btns{grid-template-columns:1fr}
+  .app-main{padding:18px}
+}
+</style>
+</head>
+<body>
+
+<!-- ── ORCA POD STRIP ── -->
+<div id="orca-strip">
+  <span class="strip-label">🐬 Orca Pod</span>
+  <a class="strip-app" href="https://keiko-dev-lcai.github.io/myice/" target="_blank">⚕️ MyICE</a>
+  <a class="strip-app" href="https://orcamail.ai" target="_blank">✉️ OrcaMail</a>
+  <a class="strip-app" href="https://orcafiles.ai" target="_blank">📁 OrcaFiles</a>
+  <a class="strip-app" href="https://keiko-dev-lcai.github.io/orcaguard/" target="_blank">🛡️ OrcaGuard</a>
+  <a class="strip-app" href="https://orcamint.xyz" target="_blank">🎨 OrcaMint</a>
+  <a class="strip-app" href="https://orcalearn.ai" target="_blank">📚 OrcaLearn</a>
+  <a class="strip-app" href="https://keiko-dev-lcai.github.io/orcatax/" target="_blank">💰 OrcaTax</a>
+  <a class="strip-app" href="https://keiko-dev-lcai.github.io/lightdex/" target="_blank">🔁 LightDex</a>
+  <a class="strip-app" href="https://keiko-dev-lcai.github.io/topten/" target="_blank">🔥 TopTen</a>
+  <a class="strip-app" href="https://smartcontractexplainer.xyz" target="_blank">📜 SCExplainer</a>
+  <a class="strip-app" href="https://emojisandstickers.xyz" target="_blank">😄 Emojis</a>
+  <a class="strip-app" href="https://keiko-dev-lcai.github.io/orcanode/" target="_blank">⚡ OrcaNode</a>
+  <a class="strip-app" href="https://keiko-dev-lcai.github.io/orcaappbuilder/" target="_blank">🛠️ AppBuilder</a>
+  <a class="strip-app active" href="#">🎞️ AV Archives</a>
+</div>
+
+<!-- ── APP NAV ── -->
+<nav id="app-nav">
+  <a class="nav-logo" href="#" onclick="showScreen('landing');return false">
+    <span class="nav-logo-icon">🎞️</span>
+    <div>
+      <div class="nav-logo-text">Audio &amp; Visual Archives</div>
+      <div class="nav-logo-sub">Lightchain · On-Chain Forever</div>
+    </div>
+  </a>
+  <div class="nav-spacer"></div>
+  <span id="nav-wallet-addr" class="nav-wallet-addr" style="display:none"></span>
+  <button class="nav-btn nav-btn-outline" id="btn-my-archives" onclick="goMyArchives()" style="display:none">📂 My Archives</button>
+  <button class="nav-btn nav-btn-primary" id="btn-connect" onclick="connectWallet()">🔗 Connect Wallet</button>
+  <button class="nav-btn nav-btn-outline" id="btn-disconnect" onclick="disconnectWallet()" style="display:none">Disconnect</button>
+</nav>
+
+<!-- ══════════════════════════════════════════════
+     SCREEN: LANDING
+══════════════════════════════════════════════ -->
+<div id="screen-landing" class="screen active">
+  <div class="hero">
+    <div class="hero-eyebrow">🌐 On-Chain · Permanent · Yours Forever</div>
+    <h1 class="hero-title">Audio &amp; Visual<br><span>Archives</span></h1>
+    <p class="hero-tagline">Your memories. On-chain. Forever. The personal Wayback Machine — photos, videos, audio, text, and documents stored directly on the Lightchain blockchain. No cloud. No servers. No expiry.</p>
+    <div class="hero-ctas">
+      <button class="btn btn-gold" onclick="connectAndCreate()">🎞️ Create Your Archive</button>
+      <button class="btn btn-outline" onclick="showViewVaultPrompt()">🔍 View an Archive</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Choose Your Archive Template</div>
+    <div class="section-sub">Pick a template to get started — or go fully custom. You can always rename it.</div>
+    <div class="template-grid" id="landing-template-grid"></div>
+  </div>
+
+  <div class="section section-alt">
+    <div class="section-title">How It Works</div>
+    <div class="section-sub">No cloud. No IPFS. Everything lives on Lightchain — forever.</div>
+    <div class="how-grid">
+      <div class="how-card">
+        <div class="how-num">1</div>
+        <div class="how-title">Connect Your Wallet</div>
+        <div class="how-desc">Use Trust Wallet or any EVM wallet. Your wallet is your account — no signup, no email, no password.</div>
+      </div>
+      <div class="how-card">
+        <div class="how-num">2</div>
+        <div class="how-title">Create Your Archive</div>
+        <div class="how-desc">Pick a template, give it a name, and deploy it to the Lightchain blockchain in one transaction.</div>
+      </div>
+      <div class="how-card">
+        <div class="how-num">3</div>
+        <div class="how-title">Add Memories</div>
+        <div class="how-desc">Upload photos, videos, audio, or text. Files are compressed and stored as blockchain calldata — gas costs pennies.</div>
+      </div>
+      <div class="how-card">
+        <div class="how-num">4</div>
+        <div class="how-title">Share Anywhere</div>
+        <div class="how-desc">Share your archive link via WhatsApp, social media, or QR code. Anyone can view it — no wallet needed.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="text-align:center">
+    <div class="section-title">Your Life, On-Chain</div>
+    <p style="font-size:18px;color:var(--muted);max-width:640px;margin:0 auto 32px">A family album that lasts generations. A baby journal that grows with your child. A company history that can never be deleted. Whatever your story — it belongs on-chain.</p>
+    <button class="btn btn-gold" style="font-size:19px;padding:18px 42px" onclick="connectAndCreate()">🎞️ Start Your Archive Free</button>
+    <p style="font-size:14px;color:var(--muted);margin-top:14px">Gas costs ~$0.000015 per photo on Lightchain · No monthly fees ever</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     SCREEN: MY ARCHIVES
+══════════════════════════════════════════════ -->
+<div id="screen-my-archives" class="screen">
+  <div class="section">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:28px">
+      <div>
+        <div class="section-title" style="margin-bottom:0">📂 My Archives</div>
+        <div style="font-size:16px;color:var(--muted);margin-top:4px">All archives you've created, stored permanently on Lightchain</div>
+      </div>
+      <div class="nav-spacer"></div>
+      <button class="btn btn-gold" onclick="showScreen('create')">+ New Archive</button>
+    </div>
+    <div id="my-archives-content">
+      <div class="empty-state">
+        <div class="empty-state-icon">⏳</div>
+        <div class="empty-state-title">Loading archives…</div>
+        <div class="empty-state-sub">Reading from Lightchain blockchain</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     SCREEN: CREATE ARCHIVE
+══════════════════════════════════════════════ -->
+<div id="screen-create" class="screen">
+  <div style="max-width:760px;margin:0 auto;padding:40px 28px">
+    <div class="breadcrumb">
+      <a href="#" onclick="showScreen('landing');return false">Home</a>
+      <span class="breadcrumb-sep">›</span>
+      <span>Create Archive</span>
+    </div>
+    <div class="step-indicator">
+      <div class="step active" id="step1">
+        <div class="step-circle">1</div>
+        <span>Template</span>
+      </div>
+      <div class="step-line"></div>
+      <div class="step" id="step2">
+        <div class="step-circle">2</div>
+        <span>Details</span>
+      </div>
+      <div class="step-line"></div>
+      <div class="step" id="step3">
+        <div class="step-circle">3</div>
+        <span>Confirm</span>
+      </div>
+    </div>
+
+    <!-- Step 1: Template -->
+    <div id="create-step1">
+      <h2 style="font-size:26px;font-weight:800;margin-bottom:8px">Choose a Template</h2>
+      <p style="color:var(--muted);margin-bottom:24px;font-size:17px">What kind of archive do you want to create?</p>
+      <div class="template-grid" id="create-template-grid"></div>
+      <div style="margin-top:24px;text-align:right">
+        <button class="btn btn-gold" id="step1-next" onclick="goStep2()" disabled>Next: Add Details →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Details -->
+    <div id="create-step2" style="display:none">
+      <h2 style="font-size:26px;font-weight:800;margin-bottom:24px">Archive Details</h2>
+      <div class="form-group">
+        <label class="form-label">Archive Name <span style="color:var(--gold)">*</span></label>
+        <span class="form-sublabel">Give your archive a meaningful name</span>
+        <input class="form-input" id="vault-name" type="text" placeholder="e.g. Johnson Family Album 2024" maxlength="100">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <span class="form-sublabel">Tell the story behind this archive</span>
+        <textarea class="form-textarea" id="vault-desc" placeholder="e.g. Our family memories from 2024 — birthdays, holidays, and everyday moments we want to preserve forever." rows="4"></textarea>
+      </div>
+      <div style="display:flex;gap:12px;margin-top:8px">
+        <button class="btn btn-outline" onclick="backStep1()">← Back</button>
+        <button class="btn btn-gold" onclick="goStep3()">Review & Create →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Confirm -->
+    <div id="create-step3" style="display:none">
+      <h2 style="font-size:26px;font-weight:800;margin-bottom:24px">Review & Confirm</h2>
+      <div class="card" style="margin-bottom:20px">
+        <div style="font-size:14px;color:var(--muted);margin-bottom:4px">TEMPLATE</div>
+        <div id="confirm-template" style="font-size:22px;font-weight:800;margin-bottom:16px"></div>
+        <div style="font-size:14px;color:var(--muted);margin-bottom:4px">ARCHIVE NAME</div>
+        <div id="confirm-name" style="font-size:20px;font-weight:700;margin-bottom:16px;color:var(--text)"></div>
+        <div style="font-size:14px;color:var(--muted);margin-bottom:4px">DESCRIPTION</div>
+        <div id="confirm-desc" style="font-size:16px;color:var(--text);line-height:1.6"></div>
+      </div>
+      <div class="warn-banner">💡 This will create one blockchain transaction on Lightchain. Cost is less than $0.001. You'll need LCAI in your wallet for gas.</div>
+      <div style="display:flex;gap:12px">
+        <button class="btn btn-outline" onclick="backStep2()">← Back</button>
+        <button class="btn btn-gold" id="btn-create-vault" onclick="createVault()" style="flex:1;justify-content:center">🎞️ Create Archive on Lightchain</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     SCREEN: VIEW ARCHIVE
+══════════════════════════════════════════════ -->
+<div id="screen-view-archive" class="screen">
+  <div class="layout-with-sidebar">
+    <div class="app-sidebar" id="vault-sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Archive</div>
+        <div class="sidebar-vault-name" id="sv-name">—</div>
+        <div class="sidebar-template-badge" id="sv-template">—</div>
+        <div class="sidebar-desc" id="sv-desc">—</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Stats</div>
+        <div class="stat-row"><span class="stat-label">Memories</span><span class="stat-val" id="sv-count">0</span></div>
+        <div class="stat-row"><span class="stat-label">Created</span><span class="stat-val" id="sv-created">—</span></div>
+        <div class="stat-row"><span class="stat-label">Network</span><span class="stat-val" style="color:var(--green)">Lightchain</span></div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Owner</div>
+        <span class="owner-tag" id="sv-owner">—</span>
+      </div>
+      <div class="sidebar-section" id="sv-add-btn-wrap" style="display:none">
+        <button class="btn btn-gold" style="width:100%;justify-content:center" onclick="goAddMemory()">+ Add Memory</button>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Share This Archive</div>
+        <div class="share-box">
+          <div class="share-url-row">
+            <input class="share-url-input" id="sv-share-url" readonly>
+            <button class="btn btn-sm btn-gold" onclick="copyVaultLink()" title="Copy link">📋</button>
+          </div>
+          <div class="share-btns">
+            <a class="share-btn share-btn-whatsapp" id="sv-wa" href="#" target="_blank">💬 WhatsApp</a>
+            <a class="share-btn share-btn-twitter" id="sv-tw" href="#" target="_blank">🐦 Twitter</a>
+            <a class="share-btn share-btn-facebook" id="sv-fb" href="#" target="_blank">📘 Facebook</a>
+            <a class="share-btn share-btn-email" id="sv-em" href="#">📧 Email</a>
+          </div>
+          <div class="share-qr" id="sv-qr"></div>
+        </div>
+      </div>
+    </div>
+    <div class="app-main">
+      <div class="breadcrumb">
+        <a href="#" onclick="showScreen('landing');return false">Home</a>
+        <span class="breadcrumb-sep">›</span>
+        <span id="va-breadcrumb-name">Archive</span>
+      </div>
+      <div id="memories-content">
+        <div class="empty-state">
+          <div class="empty-state-icon">⏳</div>
+          <div class="empty-state-title">Loading memories…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     SCREEN: ADD MEMORY
+══════════════════════════════════════════════ -->
+<div id="screen-add-memory" class="screen">
+  <div style="max-width:780px;margin:0 auto;padding:36px 28px">
+    <div class="breadcrumb">
+      <a href="#" onclick="showScreen('landing');return false">Home</a>
+      <span class="breadcrumb-sep">›</span>
+      <a href="#" id="add-mem-vault-link" onclick="goViewVaultCurrent();return false">Archive</a>
+      <span class="breadcrumb-sep">›</span>
+      <span>Add Memory</span>
+    </div>
+    <h2 style="font-size:26px;font-weight:800;margin-bottom:8px">Add a Memory</h2>
+    <p style="color:var(--muted);margin-bottom:28px;font-size:17px">What would you like to preserve forever on Lightchain?</p>
+
+    <div class="form-group">
+      <label class="form-label">Memory Type</label>
+      <div class="type-picker" id="type-picker">
+        <button class="type-btn" data-type="photo" onclick="selectMemType(this,'photo')">
+          <span class="type-btn-icon">📸</span>
+          <span class="type-btn-label">Photo</span>
+        </button>
+        <button class="type-btn" data-type="video" onclick="selectMemType(this,'video')">
+          <span class="type-btn-icon">🎬</span>
+          <span class="type-btn-label">Video</span>
+        </button>
+        <button class="type-btn" data-type="audio" onclick="selectMemType(this,'audio')">
+          <span class="type-btn-icon">🎵</span>
+          <span class="type-btn-label">Audio</span>
+        </button>
+        <button class="type-btn" data-type="text" onclick="selectMemType(this,'text')">
+          <span class="type-btn-icon">📝</span>
+          <span class="type-btn-label">Text</span>
+        </button>
+        <button class="type-btn" data-type="document" onclick="selectMemType(this,'document')">
+          <span class="type-btn-icon">📄</span>
+          <span class="type-btn-label">Document</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Upload zone (photo/video/audio/document) -->
+    <div class="form-group" id="upload-zone-wrap" style="display:none">
+      <label class="form-label" id="upload-label">Upload File</label>
+      <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()" ondragover="onDragOver(event)" ondrop="onDrop(event)" ondragleave="onDragLeave(event)">
+        <div class="upload-zone-icon" id="uz-icon">📁</div>
+        <div class="upload-zone-text" id="uz-text">Click or drag &amp; drop to upload</div>
+        <div class="upload-zone-sub" id="uz-sub">Select your file</div>
+      </div>
+      <input type="file" id="file-input" onchange="onFileSelect(event)">
+      <div id="file-preview" style="margin-top:16px;display:none"></div>
+      <div class="warn-banner" id="size-warning" style="display:none"></div>
+    </div>
+
+    <!-- Text input -->
+    <div class="form-group" id="text-input-wrap" style="display:none">
+      <label class="form-label">Your Text / Story</label>
+      <textarea class="form-textarea" id="mem-text-content" placeholder="Write your memory, story, or note here…" rows="8" style="font-size:17px"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Title <span style="color:var(--gold)">*</span></label>
+      <input class="form-input" id="mem-title" type="text" placeholder="Give this memory a title" maxlength="200">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Caption / Notes</label>
+      <textarea class="form-textarea" id="mem-caption" placeholder="Describe this memory, who's in it, why it matters…" rows="3"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <input class="form-input" id="mem-date" type="date">
+    </div>
+
+    <!-- AI Caption -->
+    <div class="card" style="margin-bottom:24px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="flex:1">
+          <div style="font-size:16px;font-weight:700;margin-bottom:2px">✨ AI Caption Assistant</div>
+          <div style="font-size:14px;color:var(--muted)">Describe what you see and let AI help write the caption</div>
+        </div>
+        <button class="btn btn-sm btn-purple" onclick="showAICaption()">✨ Get AI Help</button>
+      </div>
+      <div id="ai-caption-wrap" style="display:none;margin-top:16px">
+        <textarea class="form-textarea" id="ai-prompt" placeholder="Describe what you see in the photo/video so AI can write a caption…" rows="3" style="margin-bottom:10px"></textarea>
+        <button class="btn btn-sm btn-purple" onclick="generateAICaption()">✨ Generate Caption</button>
+        <div id="ai-result" style="display:none;margin-top:12px;background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:15px;line-height:1.7"></div>
+        <button class="btn btn-sm btn-outline" id="ai-use-btn" style="display:none;margin-top:8px" onclick="useAICaption()">Use This Caption</button>
+      </div>
+    </div>
+
+    <div class="warn-banner">⛽ Storing on Lightchain costs gas. A photo (~1MB after compression) costs less than $0.001 in LCAI. Make sure you have LCAI in your wallet.</div>
+
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <button class="btn btn-outline" onclick="goViewVaultCurrent()">← Cancel</button>
+      <button class="btn btn-gold" id="btn-store-memory" onclick="storeMemory()" style="flex:1;justify-content:center">⛓️ Store Forever on Lightchain</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     SCREEN: VIEW SINGLE MEMORY
+══════════════════════════════════════════════ -->
+<div id="screen-view-memory" class="screen">
+  <div class="layout-with-sidebar">
+    <div class="app-sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Memory</div>
+        <div class="sidebar-vault-name" id="vm-title">—</div>
+        <div class="sidebar-template-badge" id="vm-type-badge">—</div>
+        <div class="sidebar-desc" id="vm-caption">—</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Details</div>
+        <div class="stat-row"><span class="stat-label">Date</span><span class="stat-val" id="vm-date">—</span></div>
+        <div class="stat-row"><span class="stat-label">Added by</span><span class="stat-val" style="font-size:12px;font-family:monospace" id="vm-addedby">—</span></div>
+        <div class="stat-row"><span class="stat-label">Network</span><span class="stat-val" style="color:var(--green)">Lightchain</span></div>
+      </div>
+      <div class="sidebar-section">
+        <button class="btn btn-sm btn-outline" style="width:100%;justify-content:center;margin-bottom:10px" onclick="goViewVaultFromMemory()">← Back to Archive</button>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">Share This Memory</div>
+        <div class="share-box">
+          <div class="share-url-row">
+            <input class="share-url-input" id="vm-share-url" readonly>
+            <button class="btn btn-sm btn-gold" onclick="copyMemoryLink()" title="Copy link">📋</button>
+          </div>
+          <div class="share-btns">
+            <a class="share-btn share-btn-whatsapp" id="vm-wa" href="#" target="_blank">💬 WhatsApp</a>
+            <a class="share-btn share-btn-twitter" id="vm-tw" href="#" target="_blank">🐦 Twitter</a>
+            <a class="share-btn share-btn-facebook" id="vm-fb" href="#" target="_blank">📘 Facebook</a>
+            <a class="share-btn share-btn-email" id="vm-em" href="#">📧 Email</a>
+          </div>
+          <div class="share-qr" id="vm-qr"></div>
+        </div>
+      </div>
+    </div>
+    <div class="app-main">
+      <div class="breadcrumb">
+        <a href="#" onclick="showScreen('landing');return false">Home</a>
+        <span class="breadcrumb-sep">›</span>
+        <a href="#" onclick="goViewVaultFromMemory();return false" id="vm-vault-breadcrumb">Archive</a>
+        <span class="breadcrumb-sep">›</span>
+        <span id="vm-breadcrumb-title">Memory</span>
+      </div>
+      <div id="vm-media-container"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── LOADING OVERLAY ── -->
+<div id="loading-overlay" class="hidden">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loading-text">Processing…</div>
+  <div class="loading-sub" id="loading-sub">Please wait</div>
+</div>
+
+<!-- ── SUCCESS SHARE MODAL ── -->
+<div id="modal-share" class="modal-overlay hidden">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal()">×</button>
+    <div style="font-size:48px;margin-bottom:12px" id="modal-share-icon">🎉</div>
+    <div class="modal-title" id="modal-share-title">Saved to Lightchain!</div>
+    <div class="modal-sub" id="modal-share-sub">Your memory is permanently stored on the blockchain. Share it with anyone — no wallet needed to view.</div>
+    <div class="share-box" style="margin-bottom:20px">
+      <div class="share-url-row">
+        <input class="share-url-input" id="modal-share-url" readonly>
+        <button class="btn btn-sm btn-gold" onclick="copyModalLink()">📋 Copy</button>
+      </div>
+      <div class="share-btns">
+        <a class="share-btn share-btn-whatsapp" id="modal-wa" href="#" target="_blank">💬 WhatsApp</a>
+        <a class="share-btn share-btn-twitter" id="modal-tw" href="#" target="_blank">🐦 Twitter/X</a>
+        <a class="share-btn share-btn-facebook" id="modal-fb" href="#" target="_blank">📘 Facebook</a>
+        <a class="share-btn share-btn-email" id="modal-em" href="#">📧 Email</a>
+      </div>
+      <div class="share-qr" id="modal-qr"></div>
+    </div>
+    <button class="btn btn-gold" style="width:100%;justify-content:center" id="modal-view-btn">View Archive →</button>
+  </div>
+</div>
+
+<!-- ── VIEW VAULT PROMPT MODAL ── -->
+<div id="modal-view-prompt" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:420px">
+    <button class="modal-close" onclick="document.getElementById('modal-view-prompt').classList.add('hidden')">×</button>
+    <div style="font-size:36px;margin-bottom:12px">🔍</div>
+    <div class="modal-title">View an Archive</div>
+    <div class="modal-sub">Enter an Archive ID or paste a full share link</div>
+    <div class="form-group">
+      <input class="form-input" id="view-vault-input" type="text" placeholder="Archive ID (e.g. 42) or full URL">
+    </div>
+    <button class="btn btn-gold" style="width:100%;justify-content:center" onclick="goViewVaultFromInput()">🔍 View Archive</button>
+  </div>
+</div>
+
+<!-- ── TOAST ── -->
+<div id="toast"></div>
+
+<!-- ── FOOTER ── -->
+<footer>
+  <p style="margin-bottom:8px">🎞️ <strong>Audio &amp; Visual Archives</strong> — Built on <a href="https://lightchain.ai" target="_blank">Lightchain AI</a></p>
+  <p style="margin-bottom:8px">Audio &amp; Visual Archives is a decentralized application. Media is stored on the Lightchain blockchain. This app is not responsible for lost access.</p>
+  <p>Part of the <a href="https://keiko-dev-lcai.github.io/orcapod/" target="_blank">🐬 Orca Pod</a> ecosystem · <a href="https://lightchain.ai" target="_blank">Lightchain AI</a></p>
+</footer>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  CONFIG
+// ════════════════════════════════════════════════════════
+const CONTRACT_ADDRESS = 'REPLACE_WITH_CONTRACT_ADDRESS';
+const RPC_URL = 'https://rpc.mainnet.lightchain.ai';
+const CHAIN_ID = 9200;
+const CHAIN_ID_HEX = '0x23F0';
+const RAILWAY_AI_URL = 'https://web-production-a526.up.railway.app/api/chat';
+const BASE_URL = 'https://keiko-dev-lcai.github.io/orcavault/';
+
+const ABI = [
+  "function createVault(string name, string template, string description) external returns (uint256)",
+  "function addMemory(uint256 vaultId, string memType, string title, string caption, string date, string dataURI) external",
+  "function vaults(uint256) view returns (address owner, string name, string template, string description, uint256 createdAt, bool exists)",
+  "function nextVaultId() view returns (uint256)",
+  "function vaultItemCount(uint256) view returns (uint256)",
+  "event VaultCreated(uint256 indexed vaultId, address indexed owner, string name, string template, string description, uint256 timestamp)",
+  "event MemoryAdded(uint256 indexed vaultId, uint256 indexed itemIndex, address indexed addedBy, string memType, string title, string caption, string date, string dataURI)"
+];
+
+const TEMPLATES = [
+  {id:'family',   emoji:'👨‍👩‍👧', name:'Family Album',    desc:'Preserve family moments, milestones, and history for generations to come.'},
+  {id:'yearbook', emoji:'🎓',     name:'School Yearbook', desc:'Capture the memories of a school year — classes, events, graduations, friendships.'},
+  {id:'baby',     emoji:'👶',     name:'Baby Journal',    desc:'Document every milestone of your baby\'s journey, from first steps to first words.'},
+  {id:'company',  emoji:'🏢',     name:'Company History', desc:'Archive your company\'s story, founding moments, and team milestones forever.'},
+  {id:'pet',      emoji:'🐾',     name:'Pet Album',       desc:'Celebrate your furry family member with photos, videos, and precious stories.'},
+  {id:'travel',   emoji:'✈️',     name:'Travel Journal',  desc:'Immortalize your adventures — destinations, cultures, and unforgettable memories.'},
+  {id:'memorial', emoji:'🕯️',     name:'Memorial',        desc:'Honor and preserve the memory of a loved one, forever on-chain.'},
+  {id:'custom',   emoji:'⭐',     name:'Custom Archive',  desc:'Start with a blank canvas for any purpose — your archive, your way.'},
+];
+
+// ════════════════════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════════════════════
+let wallet        = null;
+let provider      = null;
+let signer        = null;
+let contract      = null;
+let readProvider  = null;
+let readContract  = null;
+let selectedTemplate = null;
+let currentVaultId   = null;
+let currentVaultData = null;
+let currentMemories  = [];
+let currentMemType   = null;
+let pendingFileDataURI = null;
+let lastShareUrl     = '';
+let vmVaultId        = null;
+let vmItemIdx        = null;
+let modalQRGenerated = false;
+let svQRGenerated    = false;
+let vmQRGenerated    = false;
+
+// ════════════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════════════
+window.addEventListener('load', () => {
+  initReadProvider();
+  renderTemplatePicker('landing-template-grid', (t) => {
+    selectedTemplate = t;
+    connectAndCreate();
+  });
+  renderTemplatePicker('create-template-grid', (t) => {
+    selectedTemplate = t;
+    document.querySelectorAll('#create-template-grid .template-card').forEach(c => c.classList.remove('selected'));
+    event.currentTarget.classList.add('selected');
+    document.getElementById('step1-next').disabled = false;
+  });
+  handleURLParams();
+});
+
+function initReadProvider() {
+  try {
+    readProvider = new ethers.JsonRpcProvider(RPC_URL);
+    readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, readProvider);
+  } catch(e) { console.warn('Read provider init:', e); }
+}
+
+function handleURLParams() {
+  const params = new URLSearchParams(window.location.search);
+  const vaultId = params.get('vault');
+  const itemIdx = params.get('item');
+  if (vaultId) {
+    currentVaultId = parseInt(vaultId);
+    if (itemIdx !== null) {
+      vmVaultId = parseInt(vaultId);
+      vmItemIdx = parseInt(itemIdx);
+      loadAndShowMemory(parseInt(vaultId), parseInt(itemIdx));
+    } else {
+      loadAndShowVault(parseInt(vaultId));
+    }
+  } else {
+    showScreen('landing');
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  SCREEN NAVIGATION
+// ════════════════════════════════════════════════════════
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const el = document.getElementById('screen-' + name);
+  if (el) el.classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+// ════════════════════════════════════════════════════════
+//  WALLET
+// ════════════════════════════════════════════════════════
+async function connectWallet() {
+  if (!window.ethereum) { showToast('Please install Trust Wallet or MetaMask', true); return; }
+  try {
+    showLoading('Connecting wallet…', 'Please approve in your wallet app');
+    await window.ethereum.request({ method: 'eth_requestAccounts' });
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer   = await provider.getSigner();
+    wallet   = await signer.getAddress();
+
+    // Switch to Lightchain
+    try {
+      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN_ID_HEX }] });
+    } catch(sw) {
+      if (sw.code === 4902) {
+        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{
+          chainId: CHAIN_ID_HEX,
+          chainName: 'Lightchain AI Mainnet',
+          nativeCurrency: { name: 'LCAI', symbol: 'LCAI', decimals: 18 },
+          rpcUrls: [RPC_URL],
+          blockExplorerUrls: ['https://mainnet.lightscan.app']
+        }]});
+      }
+    }
+
+    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    hideLoading();
+    updateNavWallet();
+    showToast('Wallet connected! ' + shortAddr(wallet));
+    return true;
+  } catch(e) {
+    hideLoading();
+    showToast('Connection failed: ' + (e.message || e), true);
+    return false;
+  }
+}
+
+function disconnectWallet() {
+  wallet = null; provider = null; signer = null; contract = null;
+  document.getElementById('btn-connect').style.display = '';
+  document.getElementById('btn-disconnect').style.display = 'none';
+  document.getElementById('btn-my-archives').style.display = 'none';
+  document.getElementById('nav-wallet-addr').style.display = 'none';
+  document.getElementById('sv-add-btn-wrap').style.display = 'none';
+  showScreen('landing');
+}
+
+function updateNavWallet() {
+  document.getElementById('btn-connect').style.display = 'none';
+  document.getElementById('btn-disconnect').style.display = '';
+  document.getElementById('btn-my-archives').style.display = '';
+  const el = document.getElementById('nav-wallet-addr');
+  el.textContent = shortAddr(wallet);
+  el.style.display = '';
+}
+
+function shortAddr(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : ''; }
+
+async function connectAndCreate() {
+  if (!wallet) {
+    const ok = await connectWallet();
+    if (!ok) return;
+  }
+  showScreen('create');
+}
+
+// ════════════════════════════════════════════════════════
+//  TEMPLATE PICKER RENDERER
+// ════════════════════════════════════════════════════════
+function renderTemplatePicker(containerId, onSelect) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '';
+  TEMPLATES.forEach(t => {
+    const card = document.createElement('div');
+    card.className = 'template-card';
+    card.dataset.id = t.id;
+    card.innerHTML = `<span class="tmpl-emoji">${t.emoji}</span><div class="tmpl-name">${t.name}</div><div class="tmpl-desc">${t.desc}</div>`;
+    card.addEventListener('click', function(evt) {
+      document.querySelectorAll('#'+containerId+' .template-card').forEach(c => c.classList.remove('selected'));
+      this.classList.add('selected');
+      selectedTemplate = t;
+      if (onSelect) onSelect.call(this, t, evt);
+    });
+    el.appendChild(card);
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  CREATE ARCHIVE — STEPS
+// ════════════════════════════════════════════════════════
+function goStep2() {
+  if (!selectedTemplate) { showToast('Please select a template', true); return; }
+  document.getElementById('create-step1').style.display = 'none';
+  document.getElementById('create-step2').style.display = '';
+  setStep(2);
+}
+function backStep1() {
+  document.getElementById('create-step2').style.display = 'none';
+  document.getElementById('create-step1').style.display = '';
+  setStep(1);
+}
+function goStep3() {
+  const name = document.getElementById('vault-name').value.trim();
+  if (!name) { showToast('Please enter an archive name', true); return; }
+  const desc = document.getElementById('vault-desc').value.trim();
+  document.getElementById('confirm-template').textContent = selectedTemplate.emoji + ' ' + selectedTemplate.name;
+  document.getElementById('confirm-name').textContent = name;
+  document.getElementById('confirm-desc').textContent = desc || '(No description)';
+  document.getElementById('create-step2').style.display = 'none';
+  document.getElementById('create-step3').style.display = '';
+  setStep(3);
+}
+function backStep2() {
+  document.getElementById('create-step3').style.display = 'none';
+  document.getElementById('create-step2').style.display = '';
+  setStep(2);
+}
+function setStep(n) {
+  [1,2,3].forEach(i => {
+    const el = document.getElementById('step'+i);
+    el.classList.remove('active','done');
+    if (i < n) el.classList.add('done');
+    else if (i === n) el.classList.add('active');
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  BLOCKCHAIN: CREATE VAULT
+// ════════════════════════════════════════════════════════
+async function createVault() {
+  if (!contract) { showToast('Please connect your wallet first', true); return; }
+  const name = document.getElementById('vault-name').value.trim();
+  const desc = document.getElementById('vault-desc').value.trim();
+  const tmpl = selectedTemplate ? selectedTemplate.name : 'Custom Archive';
+  if (!name) { showToast('Please enter an archive name', true); return; }
+
+  const btn = document.getElementById('btn-create-vault');
+  btn.disabled = true;
+  showLoading('Creating archive on Lightchain…', 'Confirm the transaction in your wallet. This may take 10–30 seconds.');
+  try {
+    const tx = await contract.createVault(name, tmpl, desc);
+    showLoading('Transaction submitted…', 'Waiting for blockchain confirmation (tx: ' + tx.hash.slice(0,10) + '…)');
+    const receipt = await tx.wait();
+
+    // Get vault ID from logs
+    let vaultId = null;
+    if (receipt && receipt.logs) {
+      for (const log of receipt.logs) {
+        try {
+          const parsed = contract.interface.parseLog(log);
+          if (parsed && parsed.name === 'VaultCreated') {
+            vaultId = Number(parsed.args[0]);
+            break;
+          }
+        } catch(e) {}
+      }
+    }
+    if (!vaultId) {
+      // fallback: nextVaultId - 1
+      const nv = await readContract.nextVaultId();
+      vaultId = Number(nv) - 1;
+    }
+
+    hideLoading();
+    currentVaultId = vaultId;
+    const shareUrl = getVaultURL(vaultId);
+    openShareModal('🎉 Archive Created!', 'Your "' + name + '" archive is live on Lightchain forever.', shareUrl, () => {
+      loadAndShowVault(vaultId);
+    });
+  } catch(e) {
+    hideLoading();
+    btn.disabled = false;
+    showToast('Transaction failed: ' + (e.reason || e.message || e), true);
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  BLOCKCHAIN: LOAD VAULT
+// ════════════════════════════════════════════════════════
+async function loadAndShowVault(vaultId) {
+  showScreen('view-archive');
+  showLoading('Loading archive…', 'Reading from Lightchain blockchain');
+  try {
+    // Get vault meta from contract
+    const vm = await readContract.vaults(vaultId);
+    const tmplObj = TEMPLATES.find(t => t.name === vm.template) || {emoji:'⭐'};
+    currentVaultData = {
+      id: vaultId,
+      owner: vm.owner,
+      name: vm.name,
+      template: vm.template,
+      templateEmoji: tmplObj.emoji,
+      description: vm.description,
+      createdAt: Number(vm.createdAt),
+    };
+
+    // Sidebar
+    document.getElementById('sv-name').textContent = vm.name;
+    document.getElementById('sv-template').textContent = tmplObj.emoji + ' ' + vm.template;
+    document.getElementById('sv-desc').textContent = vm.description || 'No description.';
+    document.getElementById('sv-created').textContent = new Date(Number(vm.createdAt)*1000).toLocaleDateString();
+    document.getElementById('sv-owner').textContent = vm.owner;
+    document.getElementById('va-breadcrumb-name').textContent = vm.name;
+
+    // Share links
+    const shareUrl = getVaultURL(vaultId);
+    const shareText = 'Check out my "' + vm.name + '" archive on Audio & Visual Archives — stored forever on Lightchain!';
+    setShareLinks('sv', shareUrl, shareText);
+
+    // Owner check
+    if (wallet && wallet.toLowerCase() === vm.owner.toLowerCase()) {
+      document.getElementById('sv-add-btn-wrap').style.display = '';
+    }
+
+    // Load memories
+    const filter = readContract.filters.MemoryAdded(vaultId);
+    const events = await readContract.queryFilter(filter, 0, 'latest');
+    currentMemories = events.map((e, i) => ({
+      idx:      Number(e.args[1]),
+      addedBy:  e.args[2],
+      memType:  e.args[3],
+      title:    e.args[4],
+      caption:  e.args[5],
+      date:     e.args[6],
+      dataURI:  e.args[7],
+    })).sort((a,b) => a.idx - b.idx);
+
+    document.getElementById('sv-count').textContent = currentMemories.length;
+    hideLoading();
+    renderMemoriesGrid();
+  } catch(e) {
+    hideLoading();
+    document.getElementById('memories-content').innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Could not load archive</div><div class="empty-state-sub">${e.message || e}<br><br>Make sure the contract address is set correctly.</div></div>`;
+  }
+}
+
+function renderMemoriesGrid() {
+  const el = document.getElementById('memories-content');
+  if (currentMemories.length === 0) {
+    const isOwner = wallet && currentVaultData && wallet.toLowerCase() === currentVaultData.owner.toLowerCase();
+    el.innerHTML = `<div class="empty-state">
+      <div class="empty-state-icon">📭</div>
+      <div class="empty-state-title">No memories yet</div>
+      <div class="empty-state-sub">${isOwner ? 'Start adding photos, videos, audio, and text to preserve your memories forever.' : 'This archive has no memories stored yet.'}</div>
+      ${isOwner ? '<button class="btn btn-gold" onclick="goAddMemory()" style="margin-top:8px">+ Add First Memory</button>' : ''}
+    </div>`;
+    return;
+  }
+  let html = `<div class="memory-grid">`;
+  currentMemories.forEach((m, i) => {
+    const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄'};
+    const icon = typeIcons[m.memType] || '📎';
+    let thumbHtml = '';
+    if (m.memType === 'photo' && m.dataURI && m.dataURI.startsWith('data:image')) {
+      thumbHtml = `<img class="memory-thumb" src="${escHtml(m.dataURI)}" alt="${escHtml(m.title)}" loading="lazy">`;
+    } else {
+      thumbHtml = `<div class="memory-thumb-placeholder">${icon}</div>`;
+    }
+    const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
+    html += `<div class="memory-card" onclick="viewMemory(${m.idx})">
+      ${thumbHtml}
+      <div class="memory-card-body">
+        <div class="memory-type-badge">${icon} ${capitalize(m.memType)}</div>
+        <div class="memory-card-title">${escHtml(m.title)}</div>
+        ${dateStr ? `<div class="memory-card-date">${dateStr}</div>` : ''}
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+  if (wallet && currentVaultData && wallet.toLowerCase() === currentVaultData.owner.toLowerCase()) {
+    html = `<div style="text-align:right;margin-bottom:20px"><button class="btn btn-gold" onclick="goAddMemory()">+ Add Memory</button></div>` + html;
+  }
+  el.innerHTML = html;
+}
+
+function viewMemory(idx) {
+  vmVaultId  = currentVaultId;
+  vmItemIdx  = idx;
+  loadAndShowMemory(currentVaultId, idx);
+}
+
+async function loadAndShowMemory(vaultId, idx) {
+  showScreen('view-memory');
+  showLoading('Loading memory…', 'Reading from Lightchain');
+  vmQRGenerated = false;
+  try {
+    let mem = currentMemories.find(m => m.idx === idx);
+    if (!mem) {
+      // If not cached, fetch from chain
+      if (!currentVaultData) {
+        const vm = await readContract.vaults(vaultId);
+        const tmplObj = TEMPLATES.find(t => t.name === vm.template) || {emoji:'⭐'};
+        currentVaultData = { id: vaultId, owner: vm.owner, name: vm.name, template: vm.template, templateEmoji: tmplObj.emoji, description: vm.description, createdAt: Number(vm.createdAt) };
+      }
+      const filter = readContract.filters.MemoryAdded(vaultId, idx);
+      const events = await readContract.queryFilter(filter, 0, 'latest');
+      if (events.length === 0) throw new Error('Memory not found on chain');
+      const e = events[0];
+      mem = { idx: Number(e.args[1]), addedBy: e.args[2], memType: e.args[3], title: e.args[4], caption: e.args[5], date: e.args[6], dataURI: e.args[7] };
+    }
+
+    const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄'};
+    document.getElementById('vm-title').textContent = mem.title;
+    document.getElementById('vm-type-badge').textContent = (typeIcons[mem.memType]||'📎') + ' ' + capitalize(mem.memType);
+    document.getElementById('vm-caption').textContent = mem.caption || '';
+    document.getElementById('vm-date').textContent = mem.date ? new Date(mem.date).toLocaleDateString() : '—';
+    document.getElementById('vm-addedby').textContent = shortAddr(mem.addedBy);
+    document.getElementById('vm-breadcrumb-title').textContent = mem.title;
+    if (currentVaultData) {
+      document.getElementById('vm-vault-breadcrumb').textContent = currentVaultData.name;
+    }
+
+    // Share
+    const shareUrl = getMemoryURL(vaultId, idx);
+    const shareText = '"' + mem.title + '" — stored forever on Lightchain via Audio & Visual Archives';
+    setShareLinks('vm', shareUrl, shareText);
+
+    // Media
+    const mc = document.getElementById('vm-media-container');
+    let mediaHtml = `<h2 style="font-size:26px;font-weight:800;margin-bottom:8px">${escHtml(mem.title)}</h2>`;
+    if (mem.caption) mediaHtml += `<p style="font-size:17px;color:var(--muted);margin-bottom:20px;line-height:1.6">${escHtml(mem.caption)}</p>`;
+
+    if (mem.memType === 'photo') {
+      mediaHtml += `<img class="memory-full-media" src="${escHtml(mem.dataURI)}" alt="${escHtml(mem.title)}">`;
+    } else if (mem.memType === 'video') {
+      mediaHtml += `<video class="memory-full-media" src="${escHtml(mem.dataURI)}" controls></video>`;
+    } else if (mem.memType === 'audio') {
+      mediaHtml += `<div style="padding:40px;text-align:center;font-size:64px;margin-bottom:20px">🎵</div><audio class="memory-full-audio" src="${escHtml(mem.dataURI)}" controls></audio>`;
+    } else if (mem.memType === 'text') {
+      mediaHtml += `<div class="memory-text-content">${escHtml(mem.dataURI)}</div>`;
+    } else if (mem.memType === 'document') {
+      mediaHtml += `<div style="text-align:center;padding:60px 20px">
+        <div style="font-size:80px;margin-bottom:16px">📄</div>
+        <div style="font-size:20px;font-weight:700;margin-bottom:20px">${escHtml(mem.title)}</div>
+        <a class="btn btn-gold" href="${escHtml(mem.dataURI)}" download="${escHtml(mem.title)}">⬇️ Download Document</a>
+      </div>`;
+    }
+    if (mem.date) {
+      mediaHtml += `<div style="margin-top:24px;font-size:14px;color:var(--muted)">📅 ${new Date(mem.date).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}</div>`;
+    }
+    mc.innerHTML = mediaHtml;
+    hideLoading();
+  } catch(e) {
+    hideLoading();
+    document.getElementById('vm-media-container').innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Could not load memory</div><div class="empty-state-sub">${e.message||e}</div></div>`;
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  BLOCKCHAIN: ADD MEMORY
+// ════════════════════════════════════════════════════════
+function goAddMemory() {
+  if (!wallet) { showToast('Please connect your wallet first', true); connectWallet(); return; }
+  const link = document.getElementById('add-mem-vault-link');
+  if (currentVaultData) link.textContent = currentVaultData.name;
+  // Set today as default date
+  document.getElementById('mem-date').value = new Date().toISOString().split('T')[0];
+  showScreen('add-memory');
+}
+function goViewVaultCurrent() {
+  if (currentVaultId) loadAndShowVault(currentVaultId);
+  else showScreen('landing');
+}
+function goViewVaultFromMemory() {
+  currentVaultId = vmVaultId;
+  if (currentVaultId) loadAndShowVault(currentVaultId);
+  else showScreen('landing');
+}
+function goMyArchives() {
+  showScreen('my-archives');
+  loadMyArchives();
+}
+
+async function loadMyArchives() {
+  if (!wallet) return;
+  const el = document.getElementById('my-archives-content');
+  el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⏳</div><div class="empty-state-title">Loading…</div></div>`;
+  try {
+    const filter = readContract.filters.VaultCreated(null, wallet);
+    const events = await readContract.queryFilter(filter, 0, 'latest');
+    if (events.length === 0) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">No archives yet</div><div class="empty-state-sub">You haven't created any archives. Start your first one!</div><button class="btn btn-gold" onclick="showScreen('create')" style="margin-top:8px">+ Create Archive</button></div>`;
+      return;
+    }
+    // VaultCreated args: [0]=vaultId, [1]=owner, [2]=name, [3]=template, [4]=description, [5]=timestamp
+    const vaultList = events.map(e => {
+      const tmplObj = TEMPLATES.find(t => t.name === e.args[3]) || {emoji:'⭐'};
+      return {
+        id:       Number(e.args[0]),
+        name:     e.args[2],
+        template: e.args[3],
+        desc:     e.args[4],
+        ts:       Number(e.args[5]),
+        emoji:    tmplObj.emoji,
+      };
+    });
+    let html = '<div class="vault-grid">';
+    vaultList.forEach(v => {
+      html += `<div class="vault-card" onclick="currentVaultId=${v.id};loadAndShowVault(${v.id})">
+        <div class="vault-card-emoji">${v.emoji}</div>
+        <div class="vault-card-name">${escHtml(v.name)}</div>
+        <div class="vault-card-template">${escHtml(v.template)}</div>
+        <div class="vault-card-desc">${escHtml(v.desc||'No description')}</div>
+        <div class="vault-card-meta">
+          <span>📅 ${new Date(v.ts*1000).toLocaleDateString()}</span>
+          <span>🆔 Archive #${v.id}</span>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Error loading archives</div><div class="empty-state-sub">${e.message||e}</div></div>`;
+  }
+}
+
+function selectMemType(btn, type) {
+  document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentMemType = type;
+  pendingFileDataURI = null;
+
+  const uploadWrap = document.getElementById('upload-zone-wrap');
+  const textWrap   = document.getElementById('text-input-wrap');
+  const uzIcon     = document.getElementById('uz-icon');
+  const uzText     = document.getElementById('uz-text');
+  const uzSub      = document.getElementById('uz-sub');
+  const uploadLabel= document.getElementById('upload-label');
+  const sizeWarn   = document.getElementById('size-warning');
+  const fileInput  = document.getElementById('file-input');
+  document.getElementById('file-preview').style.display = 'none';
+  sizeWarn.style.display = 'none';
+
+  if (type === 'text') {
+    uploadWrap.style.display = 'none';
+    textWrap.style.display = '';
+  } else {
+    textWrap.style.display = 'none';
+    uploadWrap.style.display = '';
+    if (type === 'photo') {
+      uploadLabel.textContent = 'Upload Photo';
+      uzIcon.textContent = '📸'; uzText.textContent = 'Click or drag & drop a photo';
+      uzSub.textContent = 'JPEG, PNG, GIF, WEBP — will be compressed to max 1024px, ~1MB';
+      fileInput.accept = 'image/*';
+    } else if (type === 'video') {
+      uploadLabel.textContent = 'Upload Video';
+      uzIcon.textContent = '🎬'; uzText.textContent = 'Click or drag & drop a video';
+      uzSub.textContent = 'MP4, MOV, WEBM — keep under 10MB for best results';
+      fileInput.accept = 'video/*';
+    } else if (type === 'audio') {
+      uploadLabel.textContent = 'Upload Audio';
+      uzIcon.textContent = '🎵'; uzText.textContent = 'Click or drag & drop an audio file';
+      uzSub.textContent = 'MP3, WAV, OGG, M4A — max 5MB recommended';
+      fileInput.accept = 'audio/*';
+    } else if (type === 'document') {
+      uploadLabel.textContent = 'Upload Document';
+      uzIcon.textContent = '📄'; uzText.textContent = 'Click or drag & drop a document';
+      uzSub.textContent = 'PDF, DOC, TXT — max 5MB recommended';
+      fileInput.accept = '.pdf,.doc,.docx,.txt,.xlsx,.csv';
+    }
+  }
+}
+
+function onDragOver(e) { e.preventDefault(); document.getElementById('upload-zone').classList.add('drag-over'); }
+function onDragLeave(e) { document.getElementById('upload-zone').classList.remove('drag-over'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('upload-zone').classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) processFile(file);
+}
+function onFileSelect(e) {
+  const file = e.target.files[0];
+  if (file) processFile(file);
+}
+
+async function processFile(file) {
+  const sizeWarn = document.getElementById('size-warning');
+  const preview  = document.getElementById('file-preview');
+
+  if (currentMemType === 'photo') {
+    showLoading('Compressing photo…', 'Resizing and optimizing for blockchain storage');
+    try {
+      const dataURI = await compressImage(file);
+      pendingFileDataURI = dataURI;
+      hideLoading();
+      const kb = Math.round(dataURI.length * 0.75 / 1024);
+      preview.innerHTML = `<img src="${dataURI}" style="max-width:100%;max-height:280px;border-radius:10px;display:block"><div style="font-size:13px;color:var(--muted);margin-top:8px">✅ Compressed: ~${kb} KB</div>`;
+      preview.style.display = '';
+      sizeWarn.style.display = 'none';
+    } catch(e) { hideLoading(); showToast('Error processing image: ' + e, true); }
+  } else {
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    if (file.size > 15 * 1024 * 1024) {
+      sizeWarn.textContent = '⚠️ File is ' + mb + 'MB — very large files may exceed block gas limits. Try a smaller file (under 5MB).';
+      sizeWarn.style.display = '';
+    } else if (file.size > 5 * 1024 * 1024) {
+      sizeWarn.textContent = '⚠️ File is ' + mb + 'MB — large file. Will cost more gas. Works best under 5MB.';
+      sizeWarn.style.display = '';
+    }
+    showLoading('Reading file…', 'Converting to blockchain format');
+    const dataURI = await fileToDataURI(file);
+    pendingFileDataURI = dataURI;
+    hideLoading();
+    const kb = Math.round(file.size / 1024);
+    if (currentMemType === 'video') {
+      preview.innerHTML = `<video src="${dataURI}" controls style="max-width:100%;border-radius:10px"></video><div style="font-size:13px;color:var(--muted);margin-top:8px">✅ Ready: ${kb} KB</div>`;
+    } else if (currentMemType === 'audio') {
+      preview.innerHTML = `<audio src="${dataURI}" controls style="width:100%"></audio><div style="font-size:13px;color:var(--muted);margin-top:8px">✅ Ready: ${kb} KB</div>`;
+    } else {
+      preview.innerHTML = `<div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:18px;font-size:15px">📄 ${escHtml(file.name)} (${kb} KB)</div>`;
+    }
+    preview.style.display = '';
+  }
+}
+
+async function storeMemory() {
+  if (!contract) { showToast('Please connect your wallet', true); return; }
+  const title = document.getElementById('mem-title').value.trim();
+  if (!title) { showToast('Please enter a title', true); return; }
+  if (!currentMemType) { showToast('Please select a memory type', true); return; }
+
+  let dataURI = '';
+  if (currentMemType === 'text') {
+    dataURI = document.getElementById('mem-text-content').value.trim();
+    if (!dataURI) { showToast('Please enter your text', true); return; }
+  } else {
+    if (!pendingFileDataURI) { showToast('Please upload a file first', true); return; }
+    dataURI = pendingFileDataURI;
+  }
+
+  const caption = document.getElementById('mem-caption').value.trim();
+  const date    = document.getElementById('mem-date').value || '';
+  const btn = document.getElementById('btn-store-memory');
+  btn.disabled = true;
+
+  showLoading('Storing memory on Lightchain…', 'Confirm the transaction in your wallet. Large files may take up to a minute.');
+  try {
+    const tx = await contract.addMemory(currentVaultId, currentMemType, title, caption, date, dataURI);
+    showLoading('Transaction submitted…', 'tx: ' + tx.hash.slice(0,10) + '… — waiting for confirmation');
+    const receipt = await tx.wait();
+
+    let itemIdx = null;
+    if (receipt && receipt.logs) {
+      for (const log of receipt.logs) {
+        try {
+          const parsed = contract.interface.parseLog(log);
+          if (parsed && parsed.name === 'MemoryAdded') {
+            itemIdx = Number(parsed.args[1]);
+            break;
+          }
+        } catch(e) {}
+      }
+    }
+
+    hideLoading();
+    btn.disabled = false;
+
+    // Reset form
+    document.getElementById('mem-title').value = '';
+    document.getElementById('mem-caption').value = '';
+    document.getElementById('mem-text-content').value = '';
+    document.getElementById('file-preview').style.display = 'none';
+    pendingFileDataURI = null;
+
+    const shareUrl = itemIdx !== null ? getMemoryURL(currentVaultId, itemIdx) : getVaultURL(currentVaultId);
+    openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain. Share it with anyone!', shareUrl, () => {
+      loadAndShowVault(currentVaultId);
+    });
+  } catch(e) {
+    hideLoading();
+    btn.disabled = false;
+    showToast('Transaction failed: ' + (e.reason || e.message || e), true);
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  MEDIA COMPRESSION
+// ════════════════════════════════════════════════════════
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const MAX = 1024;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w >= h) { h = Math.round(h * MAX / w); w = MAX; }
+          else        { w = Math.round(w * MAX / h); h = MAX; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function fileToDataURI(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = (e) => resolve(e.target.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  AI CAPTION
+// ════════════════════════════════════════════════════════
+function showAICaption() {
+  const w = document.getElementById('ai-caption-wrap');
+  w.style.display = w.style.display === 'none' ? '' : 'none';
+}
+
+async function generateAICaption() {
+  const prompt = document.getElementById('ai-prompt').value.trim();
+  if (!prompt) { showToast('Please describe the memory', true); return; }
+  const resultEl = document.getElementById('ai-result');
+  const useBtn   = document.getElementById('ai-use-btn');
+  resultEl.textContent = '✨ Generating…';
+  resultEl.style.display = '';
+  useBtn.style.display = 'none';
+  try {
+    const resp = await fetch(RAILWAY_AI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Write a warm, personal caption for this memory: ' + prompt + '. Keep it under 3 sentences, heartfelt and suitable for a family archive.' })
+    });
+    const data = await resp.json();
+    const text = data.response || data.message || data.content || JSON.stringify(data);
+    resultEl.textContent = text;
+    useBtn.style.display = '';
+  } catch(e) {
+    resultEl.textContent = '⚠️ AI service unavailable. (Add your Railway URL to enable this feature.)';
+  }
+}
+
+function useAICaption() {
+  const text = document.getElementById('ai-result').textContent;
+  document.getElementById('mem-caption').value = text;
+  showToast('Caption applied!');
+}
+
+// ════════════════════════════════════════════════════════
+//  SHARING
+// ════════════════════════════════════════════════════════
+function getVaultURL(vaultId) {
+  return BASE_URL + '?vault=' + vaultId;
+}
+function getMemoryURL(vaultId, idx) {
+  return BASE_URL + '?vault=' + vaultId + '&item=' + idx;
+}
+
+function setShareLinks(prefix, url, text) {
+  const input = document.getElementById(prefix + '-share-url');
+  if (input) input.value = url;
+
+  const wa = document.getElementById(prefix + '-wa');
+  const tw = document.getElementById(prefix + '-tw');
+  const fb = document.getElementById(prefix + '-fb');
+  const em = document.getElementById(prefix + '-em');
+
+  if (wa) wa.href = 'https://wa.me/?text=' + encodeURIComponent(text + '\n' + url);
+  if (tw) tw.href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text) + '&url=' + encodeURIComponent(url);
+  if (fb) fb.href = 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(url);
+  if (em) em.href = 'mailto:?subject=' + encodeURIComponent('A memory for you — Audio & Visual Archives') + '&body=' + encodeURIComponent(text + '\n\nView it here: ' + url);
+
+  // QR code
+  const qrEl = document.getElementById(prefix + '-qr');
+  if (qrEl) {
+    qrEl.innerHTML = '';
+    try { new QRCode(qrEl, { text: url, width: 160, height: 160, colorDark: '#000000', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M }); }
+    catch(e) {}
+  }
+}
+
+function openShareModal(title, sub, url, onViewCallback) {
+  document.getElementById('modal-share-title').textContent = title;
+  document.getElementById('modal-share-sub').textContent = sub;
+  lastShareUrl = url;
+
+  setShareLinks('modal', url, sub);
+  const viewBtn = document.getElementById('modal-view-btn');
+  viewBtn.onclick = () => { closeModal(); if (onViewCallback) onViewCallback(); };
+
+  document.getElementById('modal-share').classList.remove('hidden');
+}
+
+function closeModal() {
+  document.getElementById('modal-share').classList.add('hidden');
+}
+
+function copyVaultLink() {
+  const url = document.getElementById('sv-share-url').value;
+  navigator.clipboard.writeText(url).then(() => showToast('Link copied!')).catch(() => showToast('Copy failed', true));
+}
+function copyMemoryLink() {
+  const url = document.getElementById('vm-share-url').value;
+  navigator.clipboard.writeText(url).then(() => showToast('Link copied!')).catch(() => showToast('Copy failed', true));
+}
+function copyModalLink() {
+  const url = document.getElementById('modal-share-url').value;
+  navigator.clipboard.writeText(url).then(() => showToast('✅ Link copied!')).catch(() => showToast('Copy failed', true));
+}
+
+function showViewVaultPrompt() {
+  document.getElementById('modal-view-prompt').classList.remove('hidden');
+}
+function goViewVaultFromInput() {
+  const val = document.getElementById('view-vault-input').value.trim();
+  let id = null;
+  // Try to extract from URL
+  const urlMatch = val.match(/[?&]vault=(\d+)/);
+  if (urlMatch) id = parseInt(urlMatch[1]);
+  else if (/^\d+$/.test(val)) id = parseInt(val);
+  if (!id || isNaN(id)) { showToast('Please enter a valid archive ID or share URL', true); return; }
+  document.getElementById('modal-view-prompt').classList.add('hidden');
+  currentVaultId = id;
+  loadAndShowVault(id);
+}
+
+// ════════════════════════════════════════════════════════
+//  LOADING / TOAST
+// ════════════════════════════════════════════════════════
+function showLoading(text, sub) {
+  document.getElementById('loading-text').textContent = text || 'Processing…';
+  document.getElementById('loading-sub').textContent = sub || '';
+  document.getElementById('loading-overlay').classList.remove('hidden');
+}
+function hideLoading() {
+  document.getElementById('loading-overlay').classList.add('hidden');
+}
+
+let toastTimer;
+function showToast(msg, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.toggle('error', !!isError);
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+// ════════════════════════════════════════════════════════
+//  HELPERS
+// ════════════════════════════════════════════════════════
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
+</script>
+</body>
+</html>
