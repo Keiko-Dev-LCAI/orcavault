@@ -77,14 +77,14 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .nav-logo{display:flex;align-items:center;gap:12px;text-decoration:none;flex-shrink:0}
 .nav-logo-icon{font-size:28px}
 .nav-logo-text{font-size:20px;font-weight:800;color:var(--gold);letter-spacing:-0.3px;white-space:nowrap}
-.nav-logo-sub{font-size:11px;color:var(--muted);font-weight:500;letter-spacing:.04em}
+.nav-logo-sub{font-size:15px;color:var(--muted);font-weight:500;letter-spacing:.04em}
 .nav-spacer{flex:1}
-.nav-btn{padding:10px 22px;border-radius:10px;border:none;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit}
+.nav-btn{padding:12px 24px;border-radius:10px;border:none;font-size:18px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit}
 .nav-btn-outline{background:transparent;border:1.5px solid var(--border);color:var(--muted)}
 .nav-btn-outline:hover{border-color:var(--gold);color:var(--gold)}
 .nav-btn-primary{background:var(--gold);color:#0d0b18}
 .nav-btn-primary:hover{opacity:.88}
-.nav-wallet-addr{font-size:13px;color:var(--muted);font-family:monospace;background:var(--bg3);padding:6px 12px;border-radius:8px;border:1px solid var(--border)}
+.nav-wallet-addr{font-size:16px;color:var(--muted);font-family:monospace;background:var(--bg3);padding:8px 14px;border-radius:8px;border:1px solid var(--border)}
 @media(max-width:599px){
   .recovery-label{display:none}
   .nav-btn-recovery{padding:10px 14px;font-size:18px;line-height:1}
@@ -101,17 +101,17 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 
 /* ── LANDING ── */
 .hero{padding:70px 56px 50px;background:linear-gradient(160deg,#120e28 0%,#0d0b18 60%,#180d24 100%)}
-.hero-eyebrow{font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--purple);margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.hero-eyebrow{font-size:17px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--purple);margin-bottom:16px;display:flex;align-items:center;gap:8px}
 .hero-title{font-size:52px;font-weight:900;line-height:1.1;color:var(--text);margin-bottom:20px;letter-spacing:-1px}
 .hero-title span{color:var(--gold)}
-.hero-tagline{font-size:22px;color:var(--muted);margin-bottom:40px;max-width:640px;line-height:1.5}
+.hero-tagline{font-size:24px;color:var(--muted);margin-bottom:40px;max-width:900px;line-height:1.6}
 .hero-ctas{display:flex;gap:14px;flex-wrap:wrap}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:14px 30px;border-radius:12px;border:none;font-size:20px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-decoration:none;white-space:nowrap;min-height:56px}
 .btn-gold{background:var(--gold);color:#0d0b18}
 .btn-gold:hover{opacity:.88;transform:translateY(-1px)}
 .btn-outline{background:transparent;border:2px solid var(--border);color:var(--text)}
 .btn-outline:hover{border-color:var(--gold);color:var(--gold)}
-.btn-sm{padding:10px 20px;font-size:15px;border-radius:9px}
+.btn-sm{padding:12px 24px;font-size:18px;border-radius:9px}
 .btn-green{background:var(--green);color:#0d0b18}
 .btn-green:hover{opacity:.88}
 .btn-red{background:var(--red);color:#fff}
@@ -119,16 +119,16 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 /* ── SECTION ── */
 .section{padding:50px 56px}
 .section-alt{background:var(--bg2)}
-.section-title{font-size:28px;font-weight:800;margin-bottom:8px}
-.section-sub{font-size:20px;color:var(--muted);margin-bottom:32px}
+.section-title{font-size:36px;font-weight:800;margin-bottom:10px}
+.section-sub{font-size:22px;color:var(--muted);margin-bottom:32px}
 
 /* ── TEMPLATE CARDS ── */
 .template-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-.template-card{background:var(--bg3);border:2px solid var(--border);border-radius:16px;padding:28px 22px;cursor:pointer;transition:all .2s;text-align:left;min-height:160px}
+.template-card{background:var(--bg3);border:2px solid var(--border);border-radius:16px;padding:36px 28px;cursor:pointer;transition:all .2s;text-align:left;min-height:200px}
 .template-card:hover,.template-card.selected{border-color:var(--gold);background:var(--gold-dim);transform:translateY(-2px)}
-.tmpl-emoji{font-size:36px;margin-bottom:12px;display:block}
-.tmpl-name{font-size:18px;font-weight:800;margin-bottom:6px;color:var(--text)}
-.tmpl-desc{font-size:14px;color:var(--muted);line-height:1.5}
+.tmpl-emoji{font-size:48px;margin-bottom:14px;display:block}
+.tmpl-name{font-size:22px;font-weight:800;margin-bottom:8px;color:var(--text)}
+.tmpl-desc{font-size:17px;color:var(--muted);line-height:1.55}
 
 /* ── CARDS ── */
 .card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;padding:24px}
@@ -136,13 +136,13 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 
 /* ── VAULT GRID (my archives) ── */
 .vault-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px}
-.vault-card{background:var(--bg3);border:1px solid var(--border);border-radius:16px;padding:24px;cursor:pointer;transition:all .2s;text-decoration:none;display:block}
+.vault-card{background:var(--bg3);border:1px solid var(--border);border-radius:16px;padding:30px;cursor:pointer;transition:all .2s;text-decoration:none;display:block}
 .vault-card:hover{border-color:var(--gold);transform:translateY(-2px)}
-.vault-card-emoji{font-size:30px;margin-bottom:10px}
-.vault-card-name{font-size:20px;font-weight:800;color:var(--text);margin-bottom:4px}
-.vault-card-template{font-size:13px;color:var(--purple);font-weight:600;margin-bottom:8px}
-.vault-card-desc{font-size:14px;color:var(--muted);line-height:1.5;margin-bottom:12px}
-.vault-card-meta{font-size:13px;color:var(--muted);display:flex;gap:16px}
+.vault-card-emoji{font-size:40px;margin-bottom:12px}
+.vault-card-name{font-size:24px;font-weight:800;color:var(--text);margin-bottom:6px}
+.vault-card-template{font-size:17px;color:var(--purple);font-weight:600;margin-bottom:10px}
+.vault-card-desc{font-size:18px;color:var(--muted);line-height:1.55;margin-bottom:14px}
+.vault-card-meta{font-size:17px;color:var(--muted);display:flex;gap:16px}
 
 /* ── MEMORY GRID ── */
 .memory-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
@@ -151,26 +151,26 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .memory-thumb{width:100%;height:220px;object-fit:cover;display:block;background:var(--bg4)}
 .memory-thumb-placeholder{width:100%;height:220px;display:flex;align-items:center;justify-content:center;font-size:56px;background:var(--bg4)}
 .memory-card-body{padding:14px}
-.memory-type-badge{display:inline-block;font-size:13px;font-weight:700;padding:4px 10px;border-radius:8px;margin-bottom:8px;background:var(--purple-dim);color:var(--purple);border:1px solid rgba(155,127,232,.3)}
-.memory-card-title{font-size:18px;font-weight:700;margin-bottom:4px;color:var(--text)}
-.memory-card-date{font-size:15px;color:var(--muted)}
+.memory-type-badge{display:inline-block;font-size:16px;font-weight:700;padding:5px 12px;border-radius:8px;margin-bottom:10px;background:var(--purple-dim);color:var(--purple);border:1px solid rgba(155,127,232,.3)}
+.memory-card-title{font-size:20px;font-weight:700;margin-bottom:6px;color:var(--text)}
+.memory-card-date{font-size:17px;color:var(--muted)}
 
 /* ── SIDEBAR COMPONENTS ── */
 .sidebar-section{margin-bottom:28px}
-.sidebar-section-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px}
-.sidebar-vault-name{font-size:24px;font-weight:800;color:var(--text);margin-bottom:4px}
-.sidebar-template-badge{display:inline-block;font-size:15px;font-weight:600;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(232,184,75,.3);padding:4px 12px;border-radius:8px;margin-bottom:12px}
-.sidebar-desc{font-size:17px;color:var(--muted);line-height:1.6}
-.stat-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
+.sidebar-section-title{font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px}
+.sidebar-vault-name{font-size:26px;font-weight:800;color:var(--text);margin-bottom:6px}
+.sidebar-template-badge{display:inline-block;font-size:17px;font-weight:600;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(232,184,75,.3);padding:6px 14px;border-radius:8px;margin-bottom:14px}
+.sidebar-desc{font-size:19px;color:var(--muted);line-height:1.65}
+.stat-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)}
 .stat-row:last-child{border-bottom:none}
-.stat-label{font-size:17px;color:var(--muted)}
-.stat-val{font-size:18px;font-weight:700;color:var(--text)}
-.owner-tag{font-family:monospace;font-size:12px;color:var(--purple);background:var(--purple-dim);padding:4px 8px;border-radius:6px;word-break:break-all;display:block;margin-top:4px}
+.stat-label{font-size:18px;color:var(--muted)}
+.stat-val{font-size:20px;font-weight:700;color:var(--text)}
+.owner-tag{font-family:monospace;font-size:14px;color:var(--purple);background:var(--purple-dim);padding:5px 10px;border-radius:6px;word-break:break-all;display:block;margin-top:6px}
 
 /* ── SHARE BOX ── */
 .share-box{background:var(--bg4);border:1px solid var(--border);border-radius:12px;padding:18px}
 .share-url-row{display:flex;gap:8px;margin-bottom:12px}
-.share-url-input{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;font-family:monospace;outline:none;min-width:0}
+.share-url-input{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;color:var(--text);font-size:16px;font-family:monospace;outline:none;min-width:0}
 .share-url-input:focus{border-color:var(--gold)}
 .share-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
 .share-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border-radius:9px;border:1.5px solid var(--border);background:transparent;color:var(--text);font-size:18px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-decoration:none;min-height:52px}
@@ -188,7 +188,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 /* ── FORM ELEMENTS ── */
 .form-group{margin-bottom:22px}
 .form-label{display:block;font-size:20px;font-weight:700;color:var(--text);margin-bottom:8px}
-.form-sublabel{font-size:16px;color:var(--muted);margin-bottom:8px;display:block}
+.form-sublabel{font-size:18px;color:var(--muted);margin-bottom:10px;display:block}
 .form-input,.form-textarea,.form-select{width:100%;background:var(--bg3);border:1.5px solid var(--border);border-radius:10px;padding:14px 16px;color:var(--text);font-size:20px;font-family:inherit;outline:none;transition:border-color .15s}
 .form-input,.form-select{min-height:52px}
 .form-input:focus,.form-textarea:focus,.form-select:focus{border-color:var(--gold)}
@@ -199,7 +199,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .upload-zone:hover,.upload-zone.drag-over{border-color:var(--gold);background:var(--gold-dim)}
 .upload-zone-icon{font-size:56px;margin-bottom:14px}
 .upload-zone-text{font-size:20px;font-weight:600;color:var(--text);margin-bottom:8px}
-.upload-zone-sub{font-size:17px;color:var(--muted)}
+.upload-zone-sub{font-size:19px;color:var(--muted)}
 input[type=file]{display:none}
 
 /* ── MEMORY TYPE PICKER ── */
@@ -207,7 +207,7 @@ input[type=file]{display:none}
 .type-btn{background:var(--bg3);border:2px solid var(--border);border-radius:12px;padding:20px 8px;cursor:pointer;text-align:center;transition:all .15s;font-family:inherit;min-height:100px}
 .type-btn:hover,.type-btn.active{border-color:var(--gold);background:var(--gold-dim)}
 .type-btn-icon{font-size:32px;margin-bottom:8px;display:block}
-.type-btn-label{font-size:18px;font-weight:700;color:var(--text)}
+.type-btn-label{font-size:20px;font-weight:700;color:var(--text)}
 
 /* ── FULL MEMORY VIEW ── */
 .memory-full-media{width:100%;max-height:70vh;object-fit:contain;border-radius:12px;background:var(--bg3);display:block}
@@ -215,8 +215,8 @@ input[type=file]{display:none}
 .memory-text-content{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:28px;font-size:18px;line-height:1.8;white-space:pre-wrap}
 .memory-meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}
 .memory-meta-item{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
-.memory-meta-key{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px}
-.memory-meta-val{font-size:17px;font-weight:600;color:var(--text)}
+.memory-meta-key{font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
+.memory-meta-val{font-size:19px;font-weight:600;color:var(--text)}
 
 /* ── MODAL ── */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(6px)}
@@ -233,34 +233,34 @@ input[type=file]{display:none}
 .spinner{width:52px;height:52px;border:4px solid rgba(232,184,75,.2);border-top-color:var(--gold);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loading-text{font-size:18px;color:var(--muted)}
-.loading-sub{font-size:14px;color:var(--muted);opacity:.7}
+.loading-sub{font-size:17px;color:var(--muted);opacity:.7}
 
 /* ── TOAST ── */
-#toast{position:fixed;bottom:28px;right:28px;background:var(--bg3);border:1px solid var(--green);border-radius:12px;padding:14px 22px;font-size:15px;font-weight:600;color:var(--green);z-index:700;transform:translateY(80px);opacity:0;transition:all .3s;max-width:340px}
+#toast{position:fixed;bottom:28px;right:28px;background:var(--bg3);border:1px solid var(--green);border-radius:12px;padding:16px 24px;font-size:18px;font-weight:600;color:var(--green);z-index:700;transform:translateY(80px);opacity:0;transition:all .3s;max-width:400px}
 #toast.show{transform:translateY(0);opacity:1}
 #toast.error{border-color:var(--red);color:var(--red)}
 
 /* ── EMPTY STATES ── */
 .empty-state{text-align:center;padding:80px 40px}
 .empty-state-icon{font-size:64px;margin-bottom:16px}
-.empty-state-title{font-size:24px;font-weight:800;margin-bottom:8px}
-.empty-state-sub{font-size:17px;color:var(--muted);margin-bottom:28px}
+.empty-state-title{font-size:28px;font-weight:800;margin-bottom:10px}
+.empty-state-sub{font-size:20px;color:var(--muted);margin-bottom:28px}
 
 /* ── BREADCRUMB ── */
-.breadcrumb{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);margin-bottom:24px}
+.breadcrumb{display:flex;align-items:center;gap:8px;font-size:18px;color:var(--muted);margin-bottom:24px}
 .breadcrumb a{color:var(--gold);text-decoration:none;font-weight:600}
 .breadcrumb a:hover{text-decoration:underline}
 .breadcrumb-sep{color:var(--border)}
 
 /* ── HOW IT WORKS ── */
 .how-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:20px}
-.how-card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;padding:28px 22px;text-align:center}
-.how-num{width:50px;height:50px;border-radius:50%;background:var(--gold-dim);border:2px solid var(--gold);color:var(--gold);font-size:24px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 14px}
-.how-title{font-size:20px;font-weight:800;margin-bottom:6px}
-.how-desc{font-size:18px;color:var(--muted);line-height:1.55}
+.how-card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;padding:36px 28px;text-align:center}
+.how-num{width:64px;height:64px;border-radius:50%;background:var(--gold-dim);border:2px solid var(--gold);color:var(--gold);font-size:30px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 18px}
+.how-title{font-size:24px;font-weight:800;margin-bottom:8px}
+.how-desc{font-size:20px;color:var(--muted);line-height:1.6}
 
 /* ── FOOTER ── */
-footer{background:#0a0916;border-top:1px solid var(--border);padding:28px 40px;text-align:center;font-size:14px;color:var(--muted)}
+footer{background:#0a0916;border-top:1px solid var(--border);padding:32px 40px;text-align:center;font-size:17px;color:var(--muted)}
 footer a{color:var(--gold);text-decoration:none}
 
 /* ── RECOVERY INFO CARD ── */
@@ -272,12 +272,12 @@ footer a{color:var(--gold);text-decoration:none}
 .recovery-card-body{font-size:21px;color:var(--text);line-height:1.75;margin-bottom:28px}
 .recovery-item{background:var(--bg4);border:1.5px solid var(--border);border-radius:14px;padding:18px 22px;margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .recovery-item-inner{flex:1;min-width:0}
-.recovery-item-label{font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--gold);margin-bottom:6px}
-.recovery-item-value{font-size:17px;font-family:monospace;color:var(--green);word-break:break-all;line-height:1.5}
-.recovery-item-value-plain{font-size:19px;color:var(--text);font-weight:700;line-height:1.5}
-.recovery-copy-btn{background:var(--gold);color:#0d0b18;border:none;border-radius:9px;padding:12px 20px;font-size:16px;font-weight:800;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0;transition:opacity .15s;min-height:48px}
+.recovery-item-label{font-size:18px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--gold);margin-bottom:8px}
+.recovery-item-value{font-size:19px;font-family:monospace;color:var(--green);word-break:break-all;line-height:1.6}
+.recovery-item-value-plain{font-size:21px;color:var(--text);font-weight:700;line-height:1.6}
+.recovery-copy-btn{background:var(--gold);color:#0d0b18;border:none;border-radius:9px;padding:14px 22px;font-size:18px;font-weight:800;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0;transition:opacity .15s;min-height:52px}
 .recovery-copy-btn:hover{opacity:.82}
-.recovery-note{font-size:20px;color:var(--text);line-height:1.7;background:rgba(155,127,232,0.09);border-radius:14px;padding:22px 26px;border-left:5px solid var(--purple);margin-top:24px}
+.recovery-note{font-size:21px;color:var(--text);line-height:1.75;background:rgba(155,127,232,0.09);border-radius:14px;padding:26px 30px;border-left:5px solid var(--purple);margin-top:24px}
 .recovery-wallet-row{display:none}
 .recovery-wallet-row.visible{display:flex}
 .recovery-tag{display:inline-block;background:var(--gold);color:#0d0b18;font-size:14px;font-weight:800;padding:4px 12px;border-radius:6px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:16px;vertical-align:middle}
@@ -291,29 +291,29 @@ footer a{color:var(--gold);text-decoration:none}
 /* ── SUCCESS BANNER ── */
 .success-banner{background:rgba(82,201,127,.08);border:1.5px solid rgba(82,201,127,.35);border-radius:14px;padding:22px 24px;margin-bottom:24px;display:flex;align-items:flex-start;gap:14px}
 .success-banner-icon{font-size:28px;flex-shrink:0}
-.success-banner-title{font-size:18px;font-weight:800;color:var(--green);margin-bottom:4px}
-.success-banner-sub{font-size:15px;color:var(--muted)}
-.warn-banner{background:rgba(232,184,75,.07);border:1.5px solid rgba(232,184,75,.3);border-radius:12px;padding:14px 18px;font-size:14px;color:rgba(232,184,75,.9);margin-bottom:18px}
+.success-banner-title{font-size:20px;font-weight:800;color:var(--green);margin-bottom:6px}
+.success-banner-sub{font-size:18px;color:var(--muted)}
+.warn-banner{background:rgba(232,184,75,.07);border:1.5px solid rgba(232,184,75,.3);border-radius:12px;padding:16px 20px;font-size:18px;color:rgba(232,184,75,.9);margin-bottom:18px}
 
 /* ── STEP INDICATOR ── */
 .step-indicator{display:flex;align-items:center;gap:0;margin-bottom:36px}
 .step{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:600;color:var(--muted)}
 .step.active{color:var(--gold)}
 .step.done{color:var(--green)}
-.step-circle{width:38px;height:38px;border-radius:50%;border:2px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;flex-shrink:0}
+.step-circle{width:38px;height:38px;border-radius:50%;border:2px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;flex-shrink:0}
 .step-line{flex:1;height:2px;background:var(--border);margin:0 10px;min-width:20px}
 
 /* ── HERO INNER (constrain content width) ── */
-.hero-inner{max-width:800px;margin:0 auto}
+.hero-inner{max-width:1400px;margin:0 auto}
 
 /* ── SECTION CONTENT CONSTRAINT ── */
-.section-content{max-width:960px;margin:0 auto}
+.section-content{max-width:1400px;margin:0 auto}
 
 /* ── CTA CARD (Your Life, On-Chain / Start Your Free Archive) ── */
-.cta-card{max-width:750px;margin:0 auto;background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:52px 48px;box-shadow:0 8px 32px rgba(0,0,0,0.35)}
+.cta-card{max-width:1100px;margin:0 auto;background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:60px 56px;box-shadow:0 8px 32px rgba(0,0,0,0.35)}
 
 /* ── FORM CARD (Create Archive, Add Memory) ── */
-.form-card{max-width:820px;margin:0 auto;background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:40px 44px;box-shadow:0 4px 24px rgba(0,0,0,0.28)}
+.form-card{max-width:1100px;margin:0 auto;background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:48px 52px;box-shadow:0 4px 24px rgba(0,0,0,0.28)}
 
 /* ── RESPONSIVE ── */
 @media(max-width:900px){
@@ -350,19 +350,19 @@ footer a{color:var(--gold);text-decoration:none}
 
 /* ── CHAIN LINK BUTTONS ── */
 .chain-link-row{display:flex;align-items:center;gap:6px;padding:8px 14px;border-top:1px solid var(--border);flex-wrap:wrap}
-.chain-link-btn{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;padding:4px 10px;border-radius:7px;border:1px solid var(--border);background:transparent;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
+.chain-link-btn{display:inline-flex;align-items:center;gap:5px;font-size:15px;color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:7px;border:1px solid var(--border);background:transparent;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
 .chain-link-btn:hover{color:var(--gold);border-color:var(--gold)}
-.chunked-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;background:rgba(155,127,232,0.15);color:var(--purple);border:1px solid rgba(155,127,232,0.3)}
+.chunked-badge{display:inline-flex;align-items:center;gap:4px;font-size:14px;font-weight:700;padding:4px 10px;border-radius:6px;background:rgba(155,127,232,0.15);color:var(--purple);border:1px solid rgba(155,127,232,0.3)}
 .chunk-spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(232,184,75,.25);border-top-color:var(--gold);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
 
 /* ── CHUNK UPLOAD PROGRESS OVERLAY ── */
 #chunk-progress-overlay{position:fixed;inset:0;background:rgba(13,11,24,.97);z-index:800;display:none;flex-direction:column;align-items:center;justify-content:center;gap:24px;padding:40px;text-align:center}
 .cp-bar-track{width:100%;max-width:520px;background:var(--bg3);border-radius:12px;overflow:hidden;height:14px;border:1px solid var(--border)}
 #cp-bar{height:100%;background:linear-gradient(90deg,var(--purple),var(--gold));border-radius:12px;width:0%;transition:width .5s ease}
-.cp-warning{font-size:16px;font-weight:700;color:var(--red);background:rgba(232,82,82,.08);border:1px solid rgba(232,82,82,.3);border-radius:10px;padding:12px 24px}
+.cp-warning{font-size:18px;font-weight:700;color:var(--red);background:rgba(232,82,82,.08);border:1px solid rgba(232,82,82,.3);border-radius:10px;padding:14px 26px}
 
 /* ── SIZE ESTIMATE HINT ── */
-.chunk-hint{background:rgba(155,127,232,0.08);border:1px solid rgba(155,127,232,0.3);border-radius:10px;padding:10px 14px;font-size:14px;color:var(--purple);margin-top:8px;display:flex;align-items:center;gap:8px}
+.chunk-hint{background:rgba(155,127,232,0.08);border:1px solid rgba(155,127,232,0.3);border-radius:10px;padding:12px 16px;font-size:17px;color:var(--purple);margin-top:10px;display:flex;align-items:center;gap:8px}
 </style>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#f59e0b">
@@ -430,7 +430,7 @@ footer a{color:var(--gold);text-decoration:none}
       <div class="recovery-item" id="landing-vault-row-placeholder" style="background:rgba(255,255,255,0.03);border-style:dashed">
         <div class="recovery-item-inner">
           <div class="recovery-item-label">2. Your Vault Number</div>
-          <div class="recovery-item-value-plain" style="color:var(--muted);font-size:17px">Assigned when you create your archive — write it down after!</div>
+          <div class="recovery-item-value-plain" style="color:var(--muted);font-size:19px">Assigned when you create your archive — write it down after!</div>
         </div>
       </div>
 
@@ -445,7 +445,7 @@ footer a{color:var(--gold);text-decoration:none}
       <div class="recovery-item" id="landing-wallet-row-placeholder" style="background:rgba(255,255,255,0.03);border-style:dashed">
         <div class="recovery-item-inner">
           <div class="recovery-item-label">3. Your Wallet Address</div>
-          <div class="recovery-item-value-plain" style="color:var(--muted);font-size:17px">Connect your wallet above to see and copy your address.</div>
+          <div class="recovery-item-value-plain" style="color:var(--muted);font-size:19px">Connect your wallet above to see and copy your address.</div>
         </div>
       </div>
 
@@ -495,9 +495,9 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="section" style="text-align:center">
     <div class="cta-card">
       <div class="section-title">Your Life, On-Chain</div>
-      <p style="font-size:20px;color:var(--muted);max-width:580px;margin:0 auto 32px">A family album that lasts generations. A baby journal that grows with your child. A company history that can never be deleted. Whatever your story — it belongs on-chain.</p>
+      <p style="font-size:22px;color:var(--muted);max-width:820px;margin:0 auto 32px">A family album that lasts generations. A baby journal that grows with your child. A company history that can never be deleted. Whatever your story — it belongs on-chain.</p>
       <button class="btn btn-gold" style="font-size:20px;padding:18px 42px" onclick="connectAndCreate()">🎞️ Start Your Archive Free</button>
-      <p style="font-size:16px;color:var(--muted);margin-top:14px">Gas costs ~$0.000015 per photo on Lightchain · No monthly fees ever</p>
+      <p style="font-size:18px;color:var(--muted);margin-top:14px">Gas costs ~$0.000015 per photo on Lightchain · No monthly fees ever</p>
     </div>
   </div>
 </div>
@@ -510,7 +510,7 @@ footer a{color:var(--gold);text-decoration:none}
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:28px">
       <div>
         <div class="section-title" style="margin-bottom:0">📂 My Archives</div>
-        <div style="font-size:16px;color:var(--muted);margin-top:4px">All archives you've created, stored permanently on Lightchain</div>
+        <div style="font-size:18px;color:var(--muted);margin-top:6px">All archives you've created, stored permanently on Lightchain</div>
       </div>
       <div class="nav-spacer"></div>
       <button class="btn btn-gold" onclick="showScreen('create')">+ New Archive</button>
@@ -537,12 +537,12 @@ footer a{color:var(--gold);text-decoration:none}
       <p class="recovery-card-body" style="margin-bottom:32px">Your photos, videos, and stories are stored directly on the Lightchain blockchain — a permanent public record that nobody can erase, not even us. This app is just a friendly window to view them. If the window breaks, the memories behind it are still there.<br><br>To get your memories back without this app, you need three things. <strong style="color:var(--gold)">Save them all somewhere safe — your phone's notes app, a printed piece of paper, an email to yourself.</strong></p>
 
       <!-- Item 1: Contract address -->
-      <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px">What you need to save:</div>
+      <div style="font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px">What you need to save:</div>
       <div class="recovery-item">
         <div class="recovery-item-inner">
           <div class="recovery-item-label">1. Contract Address — where all archives are stored on the blockchain</div>
           <div class="recovery-item-value" id="recovery-contract-addr">0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e</div>
-          <div style="font-size:16px;color:var(--muted);margin-top:6px">This is the same for everyone — it's the address of the shared vault on Lightchain.</div>
+          <div style="font-size:18px;color:var(--muted);margin-top:8px">This is the same for everyone — it's the address of the shared vault on Lightchain.</div>
         </div>
         <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-contract-addr', this)">📋 Copy</button>
       </div>
@@ -552,7 +552,7 @@ footer a{color:var(--gold);text-decoration:none}
         <div class="recovery-item-inner">
           <div class="recovery-item-label">2. Your Vault Number — assigned when you created your archive</div>
           <div class="recovery-item-value-plain" id="recovery-vault-id" style="font-size:28px;color:var(--gold)">—</div>
-          <div style="font-size:16px;color:var(--muted);margin-top:6px">This is the number that identifies your specific archive. Write it down!</div>
+          <div style="font-size:18px;color:var(--muted);margin-top:8px">This is the number that identifies your specific archive. Write it down!</div>
         </div>
         <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-vault-id', this)">📋 Copy</button>
       </div>
@@ -568,7 +568,7 @@ footer a{color:var(--gold);text-decoration:none}
         <div class="recovery-item-inner">
           <div class="recovery-item-label">3. Your Wallet Address — proves that you own this archive</div>
           <div class="recovery-item-value" id="recovery-wallet-addr">—</div>
-          <div style="font-size:16px;color:var(--muted);margin-top:6px">This is your unique wallet address. It's public — anyone can see it, but only you can use it.</div>
+          <div style="font-size:18px;color:var(--muted);margin-top:8px">This is your unique wallet address. It's public — anyone can see it, but only you can use it.</div>
         </div>
         <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-wallet-addr', this)">📋 Copy</button>
       </div>
@@ -656,12 +656,12 @@ footer a{color:var(--gold);text-decoration:none}
     <div id="create-step3" style="display:none">
       <h2 style="font-size:30px;font-weight:800;margin-bottom:24px">Review & Confirm</h2>
       <div class="card" style="margin-bottom:20px">
-        <div style="font-size:14px;color:var(--muted);margin-bottom:4px">TEMPLATE</div>
+        <div style="font-size:17px;color:var(--muted);margin-bottom:6px">TEMPLATE</div>
         <div id="confirm-template" style="font-size:22px;font-weight:800;margin-bottom:16px"></div>
-        <div style="font-size:14px;color:var(--muted);margin-bottom:4px">ARCHIVE NAME</div>
+        <div style="font-size:17px;color:var(--muted);margin-bottom:6px">ARCHIVE NAME</div>
         <div id="confirm-name" style="font-size:20px;font-weight:700;margin-bottom:16px;color:var(--text)"></div>
-        <div style="font-size:14px;color:var(--muted);margin-bottom:4px">DESCRIPTION</div>
-        <div id="confirm-desc" style="font-size:16px;color:var(--text);line-height:1.6"></div>
+        <div style="font-size:17px;color:var(--muted);margin-bottom:6px">DESCRIPTION</div>
+        <div id="confirm-desc" style="font-size:19px;color:var(--text);line-height:1.65"></div>
       </div>
       <div class="warn-banner">💡 This will create one blockchain transaction on Lightchain. Cost is less than $0.001. You'll need LCAI in your wallet for gas.</div>
       <div style="display:flex;gap:12px">
@@ -789,7 +789,7 @@ footer a{color:var(--gold);text-decoration:none}
     <!-- Text input -->
     <div class="form-group" id="text-input-wrap" style="display:none">
       <label class="form-label">Your Text / Story</label>
-      <textarea class="form-textarea" id="mem-text-content" placeholder="Write your memory, story, or note here…" rows="8" style="font-size:17px"></textarea>
+      <textarea class="form-textarea" id="mem-text-content" placeholder="Write your memory, story, or note here…" rows="8" style="font-size:20px"></textarea>
     </div>
 
     <div class="form-group">
@@ -830,7 +830,7 @@ footer a{color:var(--gold);text-decoration:none}
       <div class="sidebar-section">
         <div class="sidebar-section-title">Details</div>
         <div class="stat-row"><span class="stat-label">Date</span><span class="stat-val" id="vm-date">—</span></div>
-        <div class="stat-row"><span class="stat-label">Added by</span><span class="stat-val" style="font-size:12px;font-family:monospace" id="vm-addedby">—</span></div>
+        <div class="stat-row"><span class="stat-label">Added by</span><span class="stat-val" style="font-size:15px;font-family:monospace" id="vm-addedby">—</span></div>
         <div class="stat-row"><span class="stat-label">Network</span><span class="stat-val" style="color:var(--green)">Lightchain</span></div>
       </div>
       <div class="sidebar-section">
@@ -873,7 +873,7 @@ footer a{color:var(--gold);text-decoration:none}
     <div class="modal-title">Large File — Chunked Upload</div>
     <div class="modal-sub">This file needs multiple blockchain transactions to store.</div>
     <div id="chunk-confirm-info" style="background:rgba(232,184,75,0.08);border:1.5px solid var(--gold);border-radius:14px;padding:20px;margin:0 0 16px;font-size:18px;line-height:1.8;color:var(--text)"></div>
-    <p style="font-size:15px;color:var(--muted);margin-bottom:20px">Each chunk is a separate wallet transaction. Keep this tab open until all chunks are confirmed. You can cancel now but not mid-upload.</p>
+    <p style="font-size:18px;color:var(--muted);margin-bottom:20px">Each chunk is a separate wallet transaction. Keep this tab open until all chunks are confirmed. You can cancel now but not mid-upload.</p>
     <div style="display:flex;gap:12px">
       <button class="btn btn-outline" onclick="cancelChunkUpload()" style="flex:1;justify-content:center">✕ Cancel</button>
       <button class="btn btn-gold" id="btn-start-chunk" onclick="startChunkUpload()" style="flex:2;justify-content:center">🚀 Start Upload</button>
@@ -889,7 +889,7 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="cp-bar-track"><div id="cp-bar"></div></div>
   <div style="font-size:18px;font-weight:700;color:var(--muted)" id="cp-pct">0%</div>
   <div class="cp-warning">⚠️ Do not close this tab — upload in progress</div>
-  <div style="font-size:14px;color:var(--muted);max-width:500px;line-height:1.6">Each chunk is a separate Lightchain transaction. Your wallet will prompt you for each one. This is normal — approve each one to continue.</div>
+  <div style="font-size:18px;color:var(--muted);max-width:600px;line-height:1.65">Each chunk is a separate Lightchain transaction. Your wallet will prompt you for each one. This is normal — approve each one to continue.</div>
 </div>
 
 <!-- ── LOADING OVERLAY ── -->
@@ -914,7 +914,7 @@ footer a{color:var(--gold);text-decoration:none}
         <li style="margin-bottom:6px">Content intended to harass, threaten, or harm others</li>
       </ul>
       <p style="margin-bottom:14px"><strong>All uploads are permanent and public.</strong> Your wallet address is permanently linked to everything you store. There is no way to delete content from the blockchain.</p>
-      <p style="color:var(--muted);font-size:14px">By using this app you accept sole responsibility for all content you upload. The developer of Audio &amp; Visual Archives bears no liability for user-submitted content.</p>
+      <p style="color:var(--muted);font-size:17px">By using this app you accept sole responsibility for all content you upload. The developer of Audio &amp; Visual Archives bears no liability for user-submitted content.</p>
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
       <input type="checkbox" id="terms-check" style="width:20px;height:20px;cursor:pointer" onchange="document.getElementById('terms-confirm-btn').disabled=!this.checked">
@@ -952,23 +952,23 @@ footer a{color:var(--gold);text-decoration:none}
       <div class="recovery-item" style="margin-bottom:10px">
         <div class="recovery-item-inner">
           <div class="recovery-item-label">Contract Address</div>
-          <div class="recovery-item-value" id="modal-contract-addr" style="font-size:14px">0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e</div>
+          <div class="recovery-item-value" id="modal-contract-addr" style="font-size:17px">0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e</div>
         </div>
-        <button class="recovery-copy-btn" style="padding:8px 14px;font-size:14px" onclick="recoveryCopy('modal-contract-addr', this)">📋</button>
+        <button class="recovery-copy-btn" style="padding:10px 16px;font-size:16px" onclick="recoveryCopy('modal-contract-addr', this)">📋</button>
       </div>
       <div class="recovery-item" id="modal-vault-row" style="margin-bottom:10px;display:none">
         <div class="recovery-item-inner">
           <div class="recovery-item-label">Your Vault Number</div>
           <div class="recovery-item-value-plain" id="modal-vault-id" style="font-size:22px;color:var(--gold);font-weight:900">—</div>
         </div>
-        <button class="recovery-copy-btn" style="padding:8px 14px;font-size:14px" onclick="recoveryCopy('modal-vault-id', this)">📋</button>
+        <button class="recovery-copy-btn" style="padding:10px 16px;font-size:16px" onclick="recoveryCopy('modal-vault-id', this)">📋</button>
       </div>
       <div class="recovery-item" id="modal-wallet-row" style="display:none">
         <div class="recovery-item-inner">
           <div class="recovery-item-label">Your Wallet Address</div>
-          <div class="recovery-item-value" id="modal-wallet-addr" style="font-size:13px">—</div>
+          <div class="recovery-item-value" id="modal-wallet-addr" style="font-size:17px">—</div>
         </div>
-        <button class="recovery-copy-btn" style="padding:8px 14px;font-size:14px" onclick="recoveryCopy('modal-wallet-addr', this)">📋</button>
+        <button class="recovery-copy-btn" style="padding:10px 16px;font-size:16px" onclick="recoveryCopy('modal-wallet-addr', this)">📋</button>
       </div>
     </div>
 
