@@ -108,8 +108,6 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .btn-outline{background:transparent;border:2px solid var(--border);color:var(--text)}
 .btn-outline:hover{border-color:var(--gold);color:var(--gold)}
 .btn-sm{padding:10px 20px;font-size:15px;border-radius:9px}
-.btn-purple{background:var(--purple);color:#fff}
-.btn-purple:hover{opacity:.88}
 .btn-green{background:var(--green);color:#0d0b18}
 .btn-green:hover{opacity:.88}
 .btn-red{background:var(--red);color:#fff}
@@ -784,23 +782,6 @@ footer a{color:var(--gold);text-decoration:none}
       <input class="form-input" id="mem-date" type="date">
     </div>
 
-    <!-- AI Caption -->
-    <div class="card" style="margin-bottom:24px">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="flex:1">
-          <div style="font-size:16px;font-weight:700;margin-bottom:2px">✨ AI Caption Assistant</div>
-          <div style="font-size:14px;color:var(--muted)">Describe what you see and let AI help write the caption</div>
-        </div>
-        <button class="btn btn-sm btn-purple" onclick="showAICaption()">✨ Get AI Help</button>
-      </div>
-      <div id="ai-caption-wrap" style="display:none;margin-top:16px">
-        <textarea class="form-textarea" id="ai-prompt" placeholder="Describe what you see in the photo/video so AI can write a caption…" rows="3" style="margin-bottom:10px"></textarea>
-        <button class="btn btn-sm btn-purple" onclick="generateAICaption()">✨ Generate Caption</button>
-        <div id="ai-result" style="display:none;margin-top:12px;background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:15px;line-height:1.7"></div>
-        <button class="btn btn-sm btn-outline" id="ai-use-btn" style="display:none;margin-top:8px" onclick="useAICaption()">Use This Caption</button>
-      </div>
-    </div>
-
     <div class="warn-banner">⛽ Lightchain transaction limit: videos &lt;78KB (use ffmpeg helper if too large), audio auto-compressed to fit, docs &lt;90KB, photos auto-compressed. Gas costs less than $0.001 per memory. Make sure you have LCAI in your wallet.</div>
 
     <div style="display:flex;gap:12px;margin-top:8px">
@@ -1005,7 +986,6 @@ const CONTRACT_ADDRESS = '0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e';
 const RPC_URL = 'https://rpc.mainnet.lightchain.ai';
 const CHAIN_ID = 9200;
 const CHAIN_ID_HEX = '0x23F0';
-const RAILWAY_AI_URL = 'https://web-production-a526.up.railway.app/api/chat';
 const BASE_URL = 'https://keiko-dev-lcai.github.io/orcavault/';
 
 const ABI = [
@@ -1947,42 +1927,6 @@ function copyVideoCommand() {
   }).catch(() => showToast('Copy failed', true));
 }
 
-// ════════════════════════════════════════════════════════
-//  AI CAPTION
-// ════════════════════════════════════════════════════════
-function showAICaption() {
-  const w = document.getElementById('ai-caption-wrap');
-  w.style.display = w.style.display === 'none' ? '' : 'none';
-}
-
-async function generateAICaption() {
-  const prompt = document.getElementById('ai-prompt').value.trim();
-  if (!prompt) { showToast('Please describe the memory', true); return; }
-  const resultEl = document.getElementById('ai-result');
-  const useBtn   = document.getElementById('ai-use-btn');
-  resultEl.textContent = '✨ Generating…';
-  resultEl.style.display = '';
-  useBtn.style.display = 'none';
-  try {
-    const resp = await fetch(RAILWAY_AI_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'Write a warm, personal caption for this memory: ' + prompt + '. Keep it under 3 sentences, heartfelt and suitable for a family archive.' })
-    });
-    const data = await resp.json();
-    const text = data.response || data.message || data.content || JSON.stringify(data);
-    resultEl.textContent = text;
-    useBtn.style.display = '';
-  } catch(e) {
-    resultEl.textContent = '⚠️ AI service unavailable. (Add your Railway URL to enable this feature.)';
-  }
-}
-
-function useAICaption() {
-  const text = document.getElementById('ai-result').textContent;
-  document.getElementById('mem-caption').value = text;
-  showToast('Caption applied!');
-}
 
 // ════════════════════════════════════════════════════════
 //  SHARING
