@@ -261,6 +261,31 @@ input[type=file]{display:none}
 footer{background:#0a0916;border-top:1px solid var(--border);padding:28px 40px;text-align:center;font-size:14px;color:var(--muted)}
 footer a{color:var(--gold);text-decoration:none}
 
+/* ── RECOVERY INFO CARD ── */
+.recovery-section{padding:50px 56px;background:linear-gradient(135deg,rgba(155,127,232,0.07) 0%,rgba(232,184,75,0.06) 100%)}
+.recovery-card{background:var(--bg2);border:3px solid var(--gold);border-radius:22px;padding:44px 48px;max-width:900px;margin:0 auto;position:relative;overflow:hidden}
+.recovery-card::before{content:'';position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,var(--gold),var(--purple),var(--gold));border-radius:0}
+.recovery-card-title{font-size:34px;font-weight:900;color:var(--gold);margin-bottom:6px;line-height:1.2}
+.recovery-card-subtitle{font-size:22px;font-weight:700;color:var(--text);margin-bottom:18px}
+.recovery-card-body{font-size:21px;color:var(--text);line-height:1.75;margin-bottom:28px}
+.recovery-item{background:var(--bg4);border:1.5px solid var(--border);border-radius:14px;padding:18px 22px;margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.recovery-item-inner{flex:1;min-width:0}
+.recovery-item-label{font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--gold);margin-bottom:6px}
+.recovery-item-value{font-size:17px;font-family:monospace;color:var(--green);word-break:break-all;line-height:1.5}
+.recovery-item-value-plain{font-size:19px;color:var(--text);font-weight:700;line-height:1.5}
+.recovery-copy-btn{background:var(--gold);color:#0d0b18;border:none;border-radius:9px;padding:12px 20px;font-size:16px;font-weight:800;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0;transition:opacity .15s;min-height:48px}
+.recovery-copy-btn:hover{opacity:.82}
+.recovery-note{font-size:20px;color:var(--text);line-height:1.7;background:rgba(155,127,232,0.09);border-radius:14px;padding:22px 26px;border-left:5px solid var(--purple);margin-top:24px}
+.recovery-wallet-row{display:none}
+.recovery-wallet-row.visible{display:flex}
+.recovery-tag{display:inline-block;background:var(--gold);color:#0d0b18;font-size:14px;font-weight:800;padding:4px 12px;border-radius:6px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:16px;vertical-align:middle}
+@media(max-width:900px){
+  .recovery-section{padding:36px 20px}
+  .recovery-card{padding:28px 22px}
+  .recovery-card-title{font-size:26px}
+  .recovery-card-body{font-size:19px}
+}
+
 /* ── SUCCESS BANNER ── */
 .success-banner{background:rgba(82,201,127,.08);border:1.5px solid rgba(82,201,127,.35);border-radius:14px;padding:22px 24px;margin-bottom:24px;display:flex;align-items:flex-start;gap:14px}
 .success-banner-icon{font-size:28px;flex-shrink:0}
@@ -336,6 +361,7 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="nav-spacer"></div>
   <span id="nav-wallet-addr" class="nav-wallet-addr" style="display:none"></span>
   <button class="nav-btn nav-btn-outline" id="btn-my-archives" onclick="goMyArchives()" style="display:none">📂 My Archives</button>
+  <button class="nav-btn" style="background:rgba(232,184,75,0.15);border:1.5px solid var(--gold);color:var(--gold);font-weight:800" onclick="showScreen('recovery')">🔐 Recovery Info</button>
   <button class="nav-btn nav-btn-outline" id="btn-disconnect" onclick="disconnectWallet()" style="display:none">Disconnect</button>
 </nav>
 
@@ -351,6 +377,59 @@ footer a{color:var(--gold);text-decoration:none}
       <div class="hero-ctas">
         <button class="btn btn-gold" onclick="connectAndCreate()">🎞️ Create Your Archive</button>
         <button class="btn btn-outline" onclick="showViewVaultPrompt()">🔍 View an Archive</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ RECOVERY INFO CARD — LANDING ══ -->
+  <div class="recovery-section">
+    <div class="recovery-card">
+      <span class="recovery-tag">⚠️ Important — Read This First</span>
+      <h2 class="recovery-card-title">Your memories live on the blockchain — not this app.</h2>
+      <p class="recovery-card-subtitle">This website is just a window. Your photos, videos, and stories are permanently stored on the Lightchain blockchain, which no one can delete — not even us.</p>
+      <p class="recovery-card-body">If this website ever goes offline, shuts down, or disappears — your memories are still there. They can always be recovered. But to do that, you'll need to know three things. <strong style="color:var(--gold)">Write them down. Save them somewhere safe.</strong></p>
+
+      <!-- Contract Address -->
+      <div class="recovery-item">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">1. Contract Address (where all archives are stored)</div>
+          <div class="recovery-item-value" id="landing-contract-addr">0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e</div>
+        </div>
+        <button class="recovery-copy-btn" onclick="recoveryCopy('landing-contract-addr', this)">📋 Copy</button>
+      </div>
+
+      <!-- Vault Number — shown after vault is known -->
+      <div class="recovery-item" id="landing-vault-row" style="display:none">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">2. Your Vault Number (assigned when you created your archive)</div>
+          <div class="recovery-item-value-plain" id="landing-vault-id">—</div>
+        </div>
+        <button class="recovery-copy-btn" onclick="recoveryCopy('landing-vault-id', this)">📋 Copy</button>
+      </div>
+      <div class="recovery-item" id="landing-vault-row-placeholder" style="background:rgba(255,255,255,0.03);border-style:dashed">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">2. Your Vault Number</div>
+          <div class="recovery-item-value-plain" style="color:var(--muted);font-size:17px">Assigned when you create your archive — write it down after!</div>
+        </div>
+      </div>
+
+      <!-- Wallet Address -->
+      <div class="recovery-item recovery-wallet-row" id="landing-wallet-row">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">3. Your Wallet Address (proves you own it)</div>
+          <div class="recovery-item-value" id="landing-wallet-addr">—</div>
+        </div>
+        <button class="recovery-copy-btn" onclick="recoveryCopy('landing-wallet-addr', this)">📋 Copy</button>
+      </div>
+      <div class="recovery-item" id="landing-wallet-row-placeholder" style="background:rgba(255,255,255,0.03);border-style:dashed">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">3. Your Wallet Address</div>
+          <div class="recovery-item-value-plain" style="color:var(--muted);font-size:17px">Connect your wallet above to see and copy your address.</div>
+        </div>
+      </div>
+
+      <div class="recovery-note">
+        💡 <strong>What to do right now:</strong> Copy the contract address above and paste it into your phone's notes app, a document, or write it on paper. After you create your first archive, add your vault number too. These three things — the contract address, your vault number, and your wallet address — are all you need to find your memories forever, even 20 years from now, even if this website is long gone.
       </div>
     </div>
   </div>
@@ -420,6 +499,76 @@ footer a{color:var(--gold);text-decoration:none}
         <div class="empty-state-icon">⏳</div>
         <div class="empty-state-title">Loading archives…</div>
         <div class="empty-state-sub">Reading from Lightchain blockchain</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     SCREEN: RECOVERY INFO
+══════════════════════════════════════════════ -->
+<div id="screen-recovery" class="screen">
+  <div class="recovery-section" style="min-height:calc(100vh - 160px)">
+    <div class="recovery-card">
+      <div style="font-size:52px;margin-bottom:16px">🔐</div>
+      <h2 class="recovery-card-title" style="font-size:38px">How to Recover Your Memories</h2>
+      <p class="recovery-card-subtitle">Even if this website disappears someday — your memories are safe forever.</p>
+      <p class="recovery-card-body" style="margin-bottom:32px">Your photos, videos, and stories are stored directly on the Lightchain blockchain — a permanent public record that nobody can erase, not even us. This app is just a friendly window to view them. If the window breaks, the memories behind it are still there.<br><br>To get your memories back without this app, you need three things. <strong style="color:var(--gold)">Save them all somewhere safe — your phone's notes app, a printed piece of paper, an email to yourself.</strong></p>
+
+      <!-- Item 1: Contract address -->
+      <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px">What you need to save:</div>
+      <div class="recovery-item">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">1. Contract Address — where all archives are stored on the blockchain</div>
+          <div class="recovery-item-value" id="recovery-contract-addr">0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e</div>
+          <div style="font-size:16px;color:var(--muted);margin-top:6px">This is the same for everyone — it's the address of the shared vault on Lightchain.</div>
+        </div>
+        <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-contract-addr', this)">📋 Copy</button>
+      </div>
+
+      <!-- Item 2: Vault number -->
+      <div class="recovery-item" id="recovery-vault-row" style="display:none">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">2. Your Vault Number — assigned when you created your archive</div>
+          <div class="recovery-item-value-plain" id="recovery-vault-id" style="font-size:28px;color:var(--gold)">—</div>
+          <div style="font-size:16px;color:var(--muted);margin-top:6px">This is the number that identifies your specific archive. Write it down!</div>
+        </div>
+        <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-vault-id', this)">📋 Copy</button>
+      </div>
+      <div class="recovery-item" id="recovery-vault-row-placeholder" style="background:rgba(255,255,255,0.03);border-style:dashed">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">2. Your Vault Number</div>
+          <div class="recovery-item-value-plain" style="color:var(--muted)">Create an archive first — then come back here and your vault number will appear.</div>
+        </div>
+      </div>
+
+      <!-- Item 3: Wallet address -->
+      <div class="recovery-item recovery-wallet-row" id="recovery-wallet-row">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">3. Your Wallet Address — proves that you own this archive</div>
+          <div class="recovery-item-value" id="recovery-wallet-addr">—</div>
+          <div style="font-size:16px;color:var(--muted);margin-top:6px">This is your unique wallet address. It's public — anyone can see it, but only you can use it.</div>
+        </div>
+        <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-wallet-addr', this)">📋 Copy</button>
+      </div>
+      <div class="recovery-item" id="recovery-wallet-row-placeholder" style="background:rgba(255,255,255,0.03);border-style:dashed">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">3. Your Wallet Address</div>
+          <div class="recovery-item-value-plain" style="color:var(--muted)">Connect your wallet to see your address here.</div>
+        </div>
+      </div>
+
+      <!-- Plain English explanation -->
+      <div class="recovery-note" style="margin-top:32px">
+        <strong style="font-size:22px;display:block;margin-bottom:12px;color:var(--gold)">How to use these to get your memories back:</strong>
+        <p style="margin-bottom:12px">1. Go to any Lightchain blockchain explorer — for example, <strong style="color:var(--text)">mainnet.lightscan.app</strong></p>
+        <p style="margin-bottom:12px">2. Search for the contract address above. You'll see a list of every archive ever created.</p>
+        <p style="margin-bottom:12px">3. Find the event logs for your vault number. Each memory you stored is a permanent log entry — your photo or video is right there, encoded in the transaction data.</p>
+        <p style="color:var(--muted)">This is a lot of technical steps — but the point is, <strong style="color:var(--text)">it's always possible.</strong> Your memories are not locked inside this app. They belong to the blockchain and to you, forever.</p>
+      </div>
+
+      <div style="margin-top:32px;text-align:center">
+        <button class="btn btn-outline" onclick="showScreen('landing')" style="font-size:18px">← Back to Home</button>
       </div>
     </div>
   </div>
@@ -747,7 +896,7 @@ footer a{color:var(--gold);text-decoration:none}
 
 <!-- ── SUCCESS SHARE MODAL ── -->
 <div id="modal-share" class="modal-overlay hidden">
-  <div class="modal-box">
+  <div class="modal-box" style="max-width:600px">
     <button class="modal-close" onclick="closeModal()">×</button>
     <div style="font-size:48px;margin-bottom:12px" id="modal-share-icon">🎉</div>
     <div class="modal-title" id="modal-share-title">Saved to Lightchain!</div>
@@ -765,6 +914,34 @@ footer a{color:var(--gold);text-decoration:none}
       </div>
       <div class="share-qr" id="modal-qr"></div>
     </div>
+
+    <!-- 💾 RECOVERY INFO IN SUCCESS MODAL -->
+    <div style="background:rgba(232,184,75,0.08);border:2px solid var(--gold);border-radius:16px;padding:22px 24px;margin-bottom:20px">
+      <div style="font-size:22px;font-weight:900;color:var(--gold);margin-bottom:8px">💾 Save Your Recovery Info</div>
+      <p style="font-size:17px;color:var(--text);line-height:1.65;margin-bottom:18px">Your memories are on the blockchain forever — but to find them later without this app, you need these three things. Save them somewhere safe right now!</p>
+      <div class="recovery-item" style="margin-bottom:10px">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">Contract Address</div>
+          <div class="recovery-item-value" id="modal-contract-addr" style="font-size:14px">0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e</div>
+        </div>
+        <button class="recovery-copy-btn" style="padding:8px 14px;font-size:14px" onclick="recoveryCopy('modal-contract-addr', this)">📋</button>
+      </div>
+      <div class="recovery-item" id="modal-vault-row" style="margin-bottom:10px;display:none">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">Your Vault Number</div>
+          <div class="recovery-item-value-plain" id="modal-vault-id" style="font-size:22px;color:var(--gold);font-weight:900">—</div>
+        </div>
+        <button class="recovery-copy-btn" style="padding:8px 14px;font-size:14px" onclick="recoveryCopy('modal-vault-id', this)">📋</button>
+      </div>
+      <div class="recovery-item" id="modal-wallet-row" style="display:none">
+        <div class="recovery-item-inner">
+          <div class="recovery-item-label">Your Wallet Address</div>
+          <div class="recovery-item-value" id="modal-wallet-addr" style="font-size:13px">—</div>
+        </div>
+        <button class="recovery-copy-btn" style="padding:8px 14px;font-size:14px" onclick="recoveryCopy('modal-wallet-addr', this)">📋</button>
+      </div>
+    </div>
+
     <button class="btn btn-gold" style="width:100%;justify-content:center" id="modal-view-btn">View Archive →</button>
   </div>
 </div>
@@ -957,6 +1134,7 @@ async function connectWallet() {
     contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
     hideLoading();
     updateNavWallet();
+    updateRecoveryPanels();
     showToast('Wallet connected! ' + shortAddr(wallet));
     return true;
   } catch(e) {
@@ -986,6 +1164,66 @@ function updateNavWallet() {
 }
 
 function shortAddr(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : ''; }
+
+// ── RECOVERY INFO HELPERS ──
+function recoveryCopy(elemId, btn) {
+  const el = document.getElementById(elemId);
+  if (!el) return;
+  const text = el.textContent.trim();
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✅ Saved!';
+    btn.style.background = 'var(--green)';
+    setTimeout(() => { btn.textContent = orig; btn.style.background = ''; }, 2200);
+    showToast('Copied — paste it somewhere safe!');
+  }).catch(() => showToast('Copy failed', true));
+}
+
+function updateRecoveryPanels() {
+  // Called whenever wallet or currentVaultId changes
+  // Landing page wallet
+  const hasWallet = !!wallet;
+  const hasVault  = !!currentVaultId;
+
+  ['landing','recovery'].forEach(prefix => {
+    const wRow    = document.getElementById(prefix + '-wallet-row');
+    const wPh     = document.getElementById(prefix + '-wallet-row-placeholder');
+    const vRow    = document.getElementById(prefix + '-vault-row');
+    const vPh     = document.getElementById(prefix + '-vault-row-placeholder');
+    const wAddr   = document.getElementById(prefix + '-wallet-addr');
+    const vId     = document.getElementById(prefix + '-vault-id');
+
+    if (wRow && wPh) {
+      if (hasWallet) {
+        wRow.classList.add('visible');
+        wPh.style.display = 'none';
+      } else {
+        wRow.classList.remove('visible');
+        wPh.style.display = '';
+      }
+    }
+    if (wAddr && hasWallet) wAddr.textContent = wallet;
+
+    if (vRow && vPh) {
+      if (hasVault) {
+        vRow.style.display = 'flex';
+        vPh.style.display = 'none';
+      } else {
+        vRow.style.display = 'none';
+        vPh.style.display = '';
+      }
+    }
+    if (vId && hasVault) vId.textContent = String(currentVaultId);
+  });
+
+  // Modal recovery rows
+  const mWalletRow = document.getElementById('modal-wallet-row');
+  const mWalletAddr = document.getElementById('modal-wallet-addr');
+  const mVaultRow  = document.getElementById('modal-vault-row');
+  const mVaultId   = document.getElementById('modal-vault-id');
+  if (mWalletRow && hasWallet) { mWalletRow.style.display = 'flex'; if (mWalletAddr) mWalletAddr.textContent = wallet; }
+  if (mVaultRow && hasVault)   { mVaultRow.style.display  = 'flex'; if (mVaultId)   mVaultId.textContent   = String(currentVaultId); }
+}
 
 async function connectAndCreate() {
   if (!wallet) {
@@ -1095,6 +1333,7 @@ async function createVault() {
 
     hideLoading();
     currentVaultId = vaultId;
+    updateRecoveryPanels();
     const shareUrl = getVaultURL(vaultId);
     openShareModal('🎉 Archive Created!', 'Your "' + name + '" archive is live on Lightchain forever.', shareUrl, () => {
       loadAndShowVault(vaultId);
@@ -1159,6 +1398,7 @@ async function loadAndShowVault(vaultId) {
 
     document.getElementById('sv-count').textContent = currentMemories.length;
     hideLoading();
+    updateRecoveryPanels();
     renderMemoriesGrid();
   } catch(e) {
     hideLoading();
@@ -1545,6 +1785,7 @@ async function storeMemory() {
 
     hideLoading();
     btn.disabled = false;
+    updateRecoveryPanels();
 
     // Reset form
     document.getElementById('mem-title').value = '';
