@@ -67,7 +67,7 @@ contract AudioVisualArchives {
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:18px;line-height:1.6;min-height:100vh;overflow-x:hidden}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:20px;line-height:1.6;min-height:100vh;overflow-x:hidden}
 
 /* ── ORCA POD STRIP ── */
 #orca-strip{background:#0a0916;border-bottom:1px solid var(--border);padding:0 16px;display:flex;align-items:center;gap:0;overflow-x:auto;scrollbar-width:none;height:44px;flex-shrink:0}
@@ -103,11 +103,11 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 /* ── LANDING ── */
 .hero{padding:70px 56px 50px;background:linear-gradient(160deg,#120e28 0%,#0d0b18 60%,#180d24 100%)}
 .hero-eyebrow{font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--purple);margin-bottom:16px;display:flex;align-items:center;gap:8px}
-.hero-title{font-size:clamp(36px,5vw,64px);font-weight:900;line-height:1.1;color:var(--text);margin-bottom:20px;letter-spacing:-1px}
+.hero-title{font-size:52px;font-weight:900;line-height:1.1;color:var(--text);margin-bottom:20px;letter-spacing:-1px}
 .hero-title span{color:var(--gold)}
-.hero-tagline{font-size:clamp(18px,2.5vw,24px);color:var(--muted);margin-bottom:40px;max-width:640px;line-height:1.5}
+.hero-tagline{font-size:22px;color:var(--muted);margin-bottom:40px;max-width:640px;line-height:1.5}
 .hero-ctas{display:flex;gap:14px;flex-wrap:wrap}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 30px;border-radius:12px;border:none;font-size:17px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-decoration:none;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 30px;border-radius:12px;border:none;font-size:20px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-decoration:none;white-space:nowrap;min-height:56px}
 .btn-gold{background:var(--gold);color:#0d0b18}
 .btn-gold:hover{opacity:.88;transform:translateY(-1px)}
 .btn-outline{background:transparent;border:2px solid var(--border);color:var(--text)}
@@ -123,11 +123,11 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .section{padding:50px 56px}
 .section-alt{background:var(--bg2)}
 .section-title{font-size:28px;font-weight:800;margin-bottom:8px}
-.section-sub{font-size:17px;color:var(--muted);margin-bottom:32px}
+.section-sub{font-size:20px;color:var(--muted);margin-bottom:32px}
 
 /* ── TEMPLATE CARDS ── */
-.template-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
-.template-card{background:var(--bg3);border:2px solid var(--border);border-radius:16px;padding:28px 22px;cursor:pointer;transition:all .2s;text-align:left}
+.template-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.template-card{background:var(--bg3);border:2px solid var(--border);border-radius:16px;padding:28px 22px;cursor:pointer;transition:all .2s;text-align:left;min-height:160px}
 .template-card:hover,.template-card.selected{border-color:var(--gold);background:var(--gold-dim);transform:translateY(-2px)}
 .tmpl-emoji{font-size:36px;margin-bottom:12px;display:block}
 .tmpl-name{font-size:18px;font-weight:800;margin-bottom:6px;color:var(--text)}
@@ -151,23 +151,23 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .memory-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
 .memory-card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer;transition:all .2s}
 .memory-card:hover{border-color:var(--gold);transform:translateY(-2px)}
-.memory-thumb{width:100%;height:180px;object-fit:cover;display:block;background:var(--bg4)}
-.memory-thumb-placeholder{width:100%;height:180px;display:flex;align-items:center;justify-content:center;font-size:48px;background:var(--bg4)}
+.memory-thumb{width:100%;height:220px;object-fit:cover;display:block;background:var(--bg4)}
+.memory-thumb-placeholder{width:100%;height:220px;display:flex;align-items:center;justify-content:center;font-size:56px;background:var(--bg4)}
 .memory-card-body{padding:14px}
-.memory-type-badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:8px;margin-bottom:8px;background:var(--purple-dim);color:var(--purple);border:1px solid rgba(155,127,232,.3)}
-.memory-card-title{font-size:16px;font-weight:700;margin-bottom:4px;color:var(--text)}
-.memory-card-date{font-size:13px;color:var(--muted)}
+.memory-type-badge{display:inline-block;font-size:13px;font-weight:700;padding:4px 10px;border-radius:8px;margin-bottom:8px;background:var(--purple-dim);color:var(--purple);border:1px solid rgba(155,127,232,.3)}
+.memory-card-title{font-size:18px;font-weight:700;margin-bottom:4px;color:var(--text)}
+.memory-card-date{font-size:15px;color:var(--muted)}
 
 /* ── SIDEBAR COMPONENTS ── */
 .sidebar-section{margin-bottom:28px}
 .sidebar-section-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px}
-.sidebar-vault-name{font-size:22px;font-weight:800;color:var(--text);margin-bottom:4px}
-.sidebar-template-badge{display:inline-block;font-size:13px;font-weight:600;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(232,184,75,.3);padding:4px 12px;border-radius:8px;margin-bottom:12px}
-.sidebar-desc{font-size:15px;color:var(--muted);line-height:1.6}
-.stat-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}
+.sidebar-vault-name{font-size:24px;font-weight:800;color:var(--text);margin-bottom:4px}
+.sidebar-template-badge{display:inline-block;font-size:15px;font-weight:600;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(232,184,75,.3);padding:4px 12px;border-radius:8px;margin-bottom:12px}
+.sidebar-desc{font-size:17px;color:var(--muted);line-height:1.6}
+.stat-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
 .stat-row:last-child{border-bottom:none}
-.stat-label{font-size:14px;color:var(--muted)}
-.stat-val{font-size:16px;font-weight:700;color:var(--text)}
+.stat-label{font-size:17px;color:var(--muted)}
+.stat-val{font-size:18px;font-weight:700;color:var(--text)}
 .owner-tag{font-family:monospace;font-size:12px;color:var(--purple);background:var(--purple-dim);padding:4px 8px;border-radius:6px;word-break:break-all;display:block;margin-top:4px}
 
 /* ── SHARE BOX ── */
@@ -176,7 +176,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .share-url-input{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;font-family:monospace;outline:none;min-width:0}
 .share-url-input:focus{border-color:var(--gold)}
 .share-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
-.share-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border-radius:9px;border:1.5px solid var(--border);background:transparent;color:var(--text);font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-decoration:none}
+.share-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border-radius:9px;border:1.5px solid var(--border);background:transparent;color:var(--text);font-size:18px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-decoration:none;min-height:52px}
 .share-btn:hover{transform:translateY(-1px)}
 .share-btn-whatsapp{border-color:#25D366;color:#25D366}
 .share-btn-whatsapp:hover{background:rgba(37,211,102,.1)}
@@ -190,26 +190,27 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 
 /* ── FORM ELEMENTS ── */
 .form-group{margin-bottom:22px}
-.form-label{display:block;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px}
-.form-sublabel{font-size:13px;color:var(--muted);margin-bottom:8px;display:block}
-.form-input,.form-textarea,.form-select{width:100%;background:var(--bg3);border:1.5px solid var(--border);border-radius:10px;padding:14px 16px;color:var(--text);font-size:17px;font-family:inherit;outline:none;transition:border-color .15s}
+.form-label{display:block;font-size:20px;font-weight:700;color:var(--text);margin-bottom:8px}
+.form-sublabel{font-size:16px;color:var(--muted);margin-bottom:8px;display:block}
+.form-input,.form-textarea,.form-select{width:100%;background:var(--bg3);border:1.5px solid var(--border);border-radius:10px;padding:14px 16px;color:var(--text);font-size:20px;font-family:inherit;outline:none;transition:border-color .15s}
+.form-input,.form-select{min-height:52px}
 .form-input:focus,.form-textarea:focus,.form-select:focus{border-color:var(--gold)}
 .form-input::placeholder,.form-textarea::placeholder{color:var(--muted)}
 .form-textarea{resize:vertical;min-height:100px}
 .form-select option{background:var(--bg3)}
-.upload-zone{border:2px dashed var(--border);border-radius:12px;padding:40px 24px;text-align:center;cursor:pointer;transition:all .2s;background:var(--bg3)}
+.upload-zone{border:2px dashed var(--border);border-radius:12px;padding:54px 28px;text-align:center;cursor:pointer;transition:all .2s;background:var(--bg3)}
 .upload-zone:hover,.upload-zone.drag-over{border-color:var(--gold);background:var(--gold-dim)}
-.upload-zone-icon{font-size:48px;margin-bottom:12px}
-.upload-zone-text{font-size:17px;font-weight:600;color:var(--text);margin-bottom:6px}
-.upload-zone-sub{font-size:14px;color:var(--muted)}
+.upload-zone-icon{font-size:56px;margin-bottom:14px}
+.upload-zone-text{font-size:20px;font-weight:600;color:var(--text);margin-bottom:8px}
+.upload-zone-sub{font-size:17px;color:var(--muted)}
 input[type=file]{display:none}
 
 /* ── MEMORY TYPE PICKER ── */
-.type-picker{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:24px}
-.type-btn{background:var(--bg3);border:2px solid var(--border);border-radius:12px;padding:16px 8px;cursor:pointer;text-align:center;transition:all .15s;font-family:inherit}
+.type-picker{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}
+.type-btn{background:var(--bg3);border:2px solid var(--border);border-radius:12px;padding:20px 8px;cursor:pointer;text-align:center;transition:all .15s;font-family:inherit;min-height:100px}
 .type-btn:hover,.type-btn.active{border-color:var(--gold);background:var(--gold-dim)}
-.type-btn-icon{font-size:28px;margin-bottom:6px;display:block}
-.type-btn-label{font-size:13px;font-weight:700;color:var(--text)}
+.type-btn-icon{font-size:32px;margin-bottom:8px;display:block}
+.type-btn-label{font-size:18px;font-weight:700;color:var(--text)}
 
 /* ── FULL MEMORY VIEW ── */
 .memory-full-media{width:100%;max-height:70vh;object-fit:contain;border-radius:12px;background:var(--bg3);display:block}
@@ -226,8 +227,8 @@ input[type=file]{display:none}
 .modal-box{background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:36px;max-width:520px;width:100%;max-height:90vh;overflow-y:auto;position:relative}
 .modal-close{position:absolute;top:16px;right:18px;background:none;border:none;color:var(--muted);font-size:24px;cursor:pointer;line-height:1;transition:color .15s}
 .modal-close:hover{color:var(--text)}
-.modal-title{font-size:24px;font-weight:800;margin-bottom:8px}
-.modal-sub{font-size:16px;color:var(--muted);margin-bottom:24px}
+.modal-title{font-size:26px;font-weight:800;margin-bottom:8px}
+.modal-sub{font-size:18px;color:var(--muted);margin-bottom:24px}
 
 /* ── LOADING OVERLAY ── */
 #loading-overlay{position:fixed;inset:0;background:rgba(13,11,24,.92);z-index:600;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
@@ -257,9 +258,9 @@ input[type=file]{display:none}
 /* ── HOW IT WORKS ── */
 .how-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:20px}
 .how-card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;padding:28px 22px;text-align:center}
-.how-num{width:40px;height:40px;border-radius:50%;background:var(--gold-dim);border:2px solid var(--gold);color:var(--gold);font-size:18px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 14px}
-.how-title{font-size:17px;font-weight:800;margin-bottom:6px}
-.how-desc{font-size:14px;color:var(--muted);line-height:1.55}
+.how-num{width:50px;height:50px;border-radius:50%;background:var(--gold-dim);border:2px solid var(--gold);color:var(--gold);font-size:24px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 14px}
+.how-title{font-size:20px;font-weight:800;margin-bottom:6px}
+.how-desc{font-size:18px;color:var(--muted);line-height:1.55}
 
 /* ── FOOTER ── */
 footer{background:#0a0916;border-top:1px solid var(--border);padding:28px 40px;text-align:center;font-size:14px;color:var(--muted)}
@@ -274,10 +275,10 @@ footer a{color:var(--gold);text-decoration:none}
 
 /* ── STEP INDICATOR ── */
 .step-indicator{display:flex;align-items:center;gap:0;margin-bottom:36px}
-.step{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;color:var(--muted)}
+.step{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:600;color:var(--muted)}
 .step.active{color:var(--gold)}
 .step.done{color:var(--green)}
-.step-circle{width:32px;height:32px;border-radius:50%;border:2px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0}
+.step-circle{width:38px;height:38px;border-radius:50%;border:2px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;flex-shrink:0}
 .step-line{flex:1;height:2px;background:var(--border);margin:0 10px;min-width:20px}
 
 /* ── RESPONSIVE ── */
@@ -286,9 +287,11 @@ footer a{color:var(--gold);text-decoration:none}
   .app-sidebar{width:100%;position:static;height:auto;border-right:none;border-bottom:1px solid var(--border)}
   .app-main{padding:24px 20px}
   .hero{padding:40px 20px 36px}
+  .hero-title{font-size:40px}
   .section{padding:36px 20px}
   .type-picker{grid-template-columns:repeat(3,1fr)}
   .memory-meta-grid{grid-template-columns:1fr}
+  .template-grid{grid-template-columns:repeat(2,1fr)}
 }
 @media(max-width:600px){
   .template-grid{grid-template-columns:1fr 1fr}
@@ -296,6 +299,7 @@ footer a{color:var(--gold);text-decoration:none}
   .type-picker{grid-template-columns:repeat(3,1fr)}
   .share-btns{grid-template-columns:1fr}
   .app-main{padding:18px}
+  .hero-title{font-size:32px}
 }
 </style>
 </head>
@@ -385,9 +389,9 @@ footer a{color:var(--gold);text-decoration:none}
 
   <div class="section" style="text-align:center">
     <div class="section-title">Your Life, On-Chain</div>
-    <p style="font-size:18px;color:var(--muted);max-width:640px;margin:0 auto 32px">A family album that lasts generations. A baby journal that grows with your child. A company history that can never be deleted. Whatever your story — it belongs on-chain.</p>
-    <button class="btn btn-gold" style="font-size:19px;padding:18px 42px" onclick="connectAndCreate()">🎞️ Start Your Archive Free</button>
-    <p style="font-size:14px;color:var(--muted);margin-top:14px">Gas costs ~$0.000015 per photo on Lightchain · No monthly fees ever</p>
+    <p style="font-size:20px;color:var(--muted);max-width:640px;margin:0 auto 32px">A family album that lasts generations. A baby journal that grows with your child. A company history that can never be deleted. Whatever your story — it belongs on-chain.</p>
+    <button class="btn btn-gold" style="font-size:20px;padding:18px 42px" onclick="connectAndCreate()">🎞️ Start Your Archive Free</button>
+    <p style="font-size:16px;color:var(--muted);margin-top:14px">Gas costs ~$0.000015 per photo on Lightchain · No monthly fees ever</p>
   </div>
 </div>
 
@@ -418,7 +422,7 @@ footer a{color:var(--gold);text-decoration:none}
      SCREEN: CREATE ARCHIVE
 ══════════════════════════════════════════════ -->
 <div id="screen-create" class="screen">
-  <div style="max-width:760px;margin:0 auto;padding:40px 28px">
+  <div style="padding:40px 40px">
     <div class="breadcrumb">
       <a href="#" onclick="showScreen('landing');return false">Home</a>
       <span class="breadcrumb-sep">›</span>
@@ -443,8 +447,8 @@ footer a{color:var(--gold);text-decoration:none}
 
     <!-- Step 1: Template -->
     <div id="create-step1">
-      <h2 style="font-size:26px;font-weight:800;margin-bottom:8px">Choose a Template</h2>
-      <p style="color:var(--muted);margin-bottom:24px;font-size:17px">What kind of archive do you want to create?</p>
+      <h2 style="font-size:30px;font-weight:800;margin-bottom:8px">Choose a Template</h2>
+      <p style="color:var(--muted);margin-bottom:24px;font-size:20px">What kind of archive do you want to create?</p>
       <div class="template-grid" id="create-template-grid"></div>
       <div style="margin-top:24px;text-align:right">
         <button class="btn btn-gold" id="step1-next" onclick="goStep2()" disabled>Next: Add Details →</button>
@@ -453,7 +457,7 @@ footer a{color:var(--gold);text-decoration:none}
 
     <!-- Step 2: Details -->
     <div id="create-step2" style="display:none">
-      <h2 style="font-size:26px;font-weight:800;margin-bottom:24px">Archive Details</h2>
+      <h2 style="font-size:30px;font-weight:800;margin-bottom:24px">Archive Details</h2>
       <div class="form-group">
         <label class="form-label">Archive Name <span style="color:var(--gold)">*</span></label>
         <span class="form-sublabel">Give your archive a meaningful name</span>
@@ -472,7 +476,7 @@ footer a{color:var(--gold);text-decoration:none}
 
     <!-- Step 3: Confirm -->
     <div id="create-step3" style="display:none">
-      <h2 style="font-size:26px;font-weight:800;margin-bottom:24px">Review & Confirm</h2>
+      <h2 style="font-size:30px;font-weight:800;margin-bottom:24px">Review & Confirm</h2>
       <div class="card" style="margin-bottom:20px">
         <div style="font-size:14px;color:var(--muted);margin-bottom:4px">TEMPLATE</div>
         <div id="confirm-template" style="font-size:22px;font-weight:800;margin-bottom:16px"></div>
@@ -513,7 +517,7 @@ footer a{color:var(--gold);text-decoration:none}
         <span class="owner-tag" id="sv-owner">—</span>
       </div>
       <div class="sidebar-section" id="sv-add-btn-wrap" style="display:none">
-        <button class="btn btn-gold" style="width:100%;justify-content:center" onclick="goAddMemory()">+ Add Memory</button>
+        <button class="btn btn-gold" style="width:100%;justify-content:center;min-height:56px;font-size:20px" onclick="goAddMemory()">+ Add Memory</button>
       </div>
       <div class="sidebar-section">
         <div class="sidebar-section-title">Share This Archive</div>
@@ -552,7 +556,7 @@ footer a{color:var(--gold);text-decoration:none}
      SCREEN: ADD MEMORY
 ══════════════════════════════════════════════ -->
 <div id="screen-add-memory" class="screen">
-  <div style="max-width:780px;margin:0 auto;padding:36px 28px">
+  <div style="padding:36px 40px">
     <div class="breadcrumb">
       <a href="#" onclick="showScreen('landing');return false">Home</a>
       <span class="breadcrumb-sep">›</span>
@@ -560,8 +564,8 @@ footer a{color:var(--gold);text-decoration:none}
       <span class="breadcrumb-sep">›</span>
       <span>Add Memory</span>
     </div>
-    <h2 style="font-size:26px;font-weight:800;margin-bottom:8px">Add a Memory</h2>
-    <p style="color:var(--muted);margin-bottom:28px;font-size:17px">What would you like to preserve forever on Lightchain?</p>
+    <h2 style="font-size:30px;font-weight:800;margin-bottom:8px">Add a Memory</h2>
+    <p style="color:var(--muted);margin-bottom:28px;font-size:20px">What would you like to preserve forever on Lightchain?</p>
 
     <div class="form-group">
       <label class="form-label">Memory Type</label>
@@ -638,11 +642,11 @@ footer a{color:var(--gold);text-decoration:none}
       </div>
     </div>
 
-    <div class="warn-banner">⛽ Storing on Lightchain costs gas. A photo (~1MB after compression) costs less than $0.001 in LCAI. Make sure you have LCAI in your wallet.</div>
+    <div class="warn-banner">⛽ Lightchain transaction limit: videos &lt;78KB, audio/docs &lt;90KB, photos auto-compressed. Gas costs less than $0.001 per memory. Make sure you have LCAI in your wallet.</div>
 
     <div style="display:flex;gap:12px;margin-top:8px">
       <button class="btn btn-outline" onclick="goViewVaultCurrent()">← Cancel</button>
-      <button class="btn btn-gold" id="btn-store-memory" onclick="storeMemory()" style="flex:1;justify-content:center">⛓️ Store Forever on Lightchain</button>
+      <button class="btn btn-gold" id="btn-store-memory" onclick="storeMemory()" style="flex:1;justify-content:center;min-height:60px;font-size:22px">⛓️ Store Forever on Lightchain</button>
     </div>
   </div>
 </div>
@@ -709,8 +713,8 @@ footer a{color:var(--gold);text-decoration:none}
 <div id="modal-terms" class="modal-overlay hidden">
   <div class="modal-box" style="max-width:580px">
     <div style="font-size:44px;margin-bottom:12px;text-align:center">⚖️</div>
-    <div class="modal-title" style="font-size:24px">Terms of Use</div>
-    <div style="background:rgba(232,184,75,0.08);border:2px solid var(--gold);border-radius:12px;padding:20px;margin:16px 0;font-size:16px;line-height:1.7;color:var(--text)">
+    <div class="modal-title">Terms of Use</div>
+    <div style="background:rgba(232,184,75,0.08);border:2px solid var(--gold);border-radius:12px;padding:20px;margin:16px 0;font-size:18px;line-height:1.7;color:var(--text)">
       <p style="margin-bottom:14px">Audio &amp; Visual Archives is a <strong>decentralized interface</strong> to the Lightchain blockchain. The developer does not host, store, or control any content uploaded through this app.</p>
       <p style="margin-bottom:14px"><strong style="color:var(--red)">The following content is strictly prohibited:</strong></p>
       <ul style="padding-left:20px;margin-bottom:14px">
@@ -724,9 +728,9 @@ footer a{color:var(--gold);text-decoration:none}
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
       <input type="checkbox" id="terms-check" style="width:20px;height:20px;cursor:pointer" onchange="document.getElementById('terms-confirm-btn').disabled=!this.checked">
-      <label for="terms-check" style="font-size:16px;cursor:pointer;line-height:1.5">I have read and agree to these terms. I will not upload any illegal content.</label>
+      <label for="terms-check" style="font-size:18px;cursor:pointer;line-height:1.5">I have read and agree to these terms. I will not upload any illegal content.</label>
     </div>
-    <button class="btn btn-gold" id="terms-confirm-btn" disabled onclick="acceptTerms()" style="width:100%;justify-content:center;font-size:18px;padding:14px">I Agree — Continue</button>
+    <button class="btn btn-gold" id="terms-confirm-btn" disabled onclick="acceptTerms()" style="width:100%;justify-content:center;font-size:20px;min-height:56px">I Agree — Continue</button>
   </div>
 </div>
 
@@ -1335,17 +1339,17 @@ function selectMemType(btn, type) {
     } else if (type === 'video') {
       uploadLabel.textContent = 'Upload Video';
       uzIcon.textContent = '🎬'; uzText.textContent = 'Click or drag & drop a video';
-      uzSub.textContent = 'MP4, MOV, WEBM — keep under 10MB for best results';
+      uzSub.textContent = '⚠️ Max 78KB — use a short clip (5–10 sec) at 240p resolution · MP4, MOV, WEBM';
       fileInput.accept = 'video/*';
     } else if (type === 'audio') {
       uploadLabel.textContent = 'Upload Audio';
       uzIcon.textContent = '🎵'; uzText.textContent = 'Click or drag & drop an audio file';
-      uzSub.textContent = 'MP3, WAV, OGG, M4A — max 5MB recommended';
+      uzSub.textContent = '⚠️ Max 90KB · MP3, WAV, OGG, M4A';
       fileInput.accept = 'audio/*';
     } else if (type === 'document') {
       uploadLabel.textContent = 'Upload Document';
       uzIcon.textContent = '📄'; uzText.textContent = 'Click or drag & drop a document';
-      uzSub.textContent = 'PDF, DOC, TXT — max 5MB recommended';
+      uzSub.textContent = '⚠️ Max 90KB · PDF, DOC, TXT';
       fileInput.accept = '.pdf,.doc,.docx,.txt,.xlsx,.csv';
     }
   }
@@ -1380,31 +1384,25 @@ async function processFile(file) {
       sizeWarn.style.display = 'none';
     } catch(e) { hideLoading(); showToast('Error processing image: ' + e, true); }
   } else {
-    const mb = (file.size / 1024 / 1024).toFixed(2);
-    const MAX_VIDEO_MB = 1.2;
-    const MAX_OTHER_MB = 3;
+    const kb = Math.round(file.size / 1024);
+    const MAX_VIDEO_BYTES = 78 * 1024;   // 78KB
+    const MAX_OTHER_BYTES = 90 * 1024;   // 90KB
     const isVideo = currentMemType === 'video';
-    const maxMB = isVideo ? MAX_VIDEO_MB : MAX_OTHER_MB;
 
-    if (isVideo && file.size > MAX_VIDEO_MB * 1024 * 1024) {
-      sizeWarn.innerHTML = `❌ <strong>Video is too large (${mb}MB).</strong> Videos must be under ${MAX_VIDEO_MB}MB to store on-chain.<br><br>
-        <strong>How to fix:</strong> Trim your video to under 30 seconds, or export at a lower resolution (480p or lower). Short clips work great!`;
+    if (isVideo && file.size > MAX_VIDEO_BYTES) {
+      sizeWarn.innerHTML = `❌ <strong>Video is too large (${kb}KB).</strong> Videos must be under 78KB on Lightchain. Use a short clip (5–10 sec) at 240p resolution. We can help you compress it.`;
       sizeWarn.style.display = '';
       sizeWarn.style.color = 'var(--red)';
       pendingFileDataURI = null;
       preview.style.display = 'none';
       return;
-    } else if (!isVideo && file.size > MAX_OTHER_MB * 1024 * 1024) {
-      sizeWarn.innerHTML = `❌ <strong>File is too large (${mb}MB).</strong> Files must be under ${MAX_OTHER_MB}MB to store on-chain.`;
+    } else if (!isVideo && file.size > MAX_OTHER_BYTES) {
+      sizeWarn.innerHTML = `❌ <strong>File is too large (${kb}KB).</strong> ${currentMemType === 'audio' ? 'Audio files' : 'Documents'} must be under 90KB to store on Lightchain.`;
       sizeWarn.style.display = '';
       sizeWarn.style.color = 'var(--red)';
       pendingFileDataURI = null;
       preview.style.display = 'none';
       return;
-    } else if (file.size > maxMB * 0.7 * 1024 * 1024) {
-      sizeWarn.innerHTML = `⚠️ File is ${mb}MB — storing this will cost a tiny bit more gas but should work fine.`;
-      sizeWarn.style.display = '';
-      sizeWarn.style.color = 'var(--gold)';
     } else {
       sizeWarn.style.display = 'none';
     }
@@ -1412,7 +1410,6 @@ async function processFile(file) {
     const dataURI = await fileToDataURI(file);
     pendingFileDataURI = dataURI;
     hideLoading();
-    const kb = Math.round(file.size / 1024);
     if (currentMemType === 'video') {
       preview.innerHTML = `<video src="${dataURI}" controls style="max-width:100%;border-radius:10px"></video><div style="font-size:13px;color:var(--muted);margin-top:8px">✅ Ready: ${kb} KB</div>`;
     } else if (currentMemType === 'audio') {
