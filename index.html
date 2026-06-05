@@ -1570,11 +1570,12 @@ function renderMemoriesGrid() {
         cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
       }
     }
-    const chainRow = m.txHash ? `<div class="chain-link-row">
-      <a class="chain-link-btn" href="${LIGHTSCAN_TX}${m.txHash}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔗 View on chain</a>
-      <button class="chain-link-btn" onclick="event.stopPropagation();copyTxHash('${m.txHash}')">📋</button>
+    const shareUrl = `${location.origin}${location.pathname}?vault=${currentVaultId}&item=${m.idx}`;
+    const chainRow = `<div class="chain-link-row">
+      <button class="chain-link-btn" onclick="event.stopPropagation();copyMemoryLink('${shareUrl}',this)" style="background:rgba(232,184,75,0.15);border-color:var(--gold);color:var(--gold);font-weight:700">📤 Share</button>
+      ${m.txHash ? `<a class="chain-link-btn" href="${LIGHTSCAN_TX}${m.txHash}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔗 Chain</a>` : ''}
       ${m._isChunked ? `<span class="chunked-badge">⛓ ${m._totalChunks} chunks</span>` : ''}
-    </div>` : '';
+    </div>`;
     html += `<div class="memory-card" onclick="viewMemory(${m.idx})">
       ${cardThumb}
       <div class="memory-card-body">
@@ -2396,6 +2397,16 @@ function copyTxHash(hash) {
   if (!hash) return;
   navigator.clipboard.writeText(hash)
     .then(() => showToast('Tx hash copied!'))
+    .catch(() => showToast('Copy failed', true));
+}
+
+function copyMemoryLink(url, btn) {
+  navigator.clipboard.writeText(url)
+    .then(() => {
+      const orig = btn.textContent;
+      btn.textContent = '✅ Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 2000);
+    })
     .catch(() => showToast('Copy failed', true));
 }
 </script>
