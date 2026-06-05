@@ -54,6 +54,8 @@ LOW_BALANCE_THRESHOLD    = float(os.environ.get("LOW_BALANCE_THRESHOLD", "10.0")
 PAID_WALLETS_FILE        = os.environ.get("PAID_WALLETS_FILE", "/data/paid_wallets.json")
 LIGHTTUBE_HIDDEN_FILE    = os.environ.get("LIGHTTUBE_HIDDEN_FILE", "/data/lighttube_hidden.json")
 LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
+# Comma-separated video IDs that are ALWAYS hidden (survives redeploys without a volume)
+LIGHTTUBE_HIDDEN_SEED    = {s.strip() for s in os.environ.get("LIGHTTUBE_HIDDEN_IDS", "").split(",") if s.strip()}
 CHUNK_SIZE               = 2 * 1024 * 1024   # 2MB chunks (matches client)
 CHAIN_ID                 = 9200
 
@@ -152,13 +154,14 @@ def save_paid_wallets(wallets):
 # ─── LightTube hidden video registry ─────────────────────────────────────────
 
 def load_hidden_videos():
-    """Load hidden video IDs from disk. Returns a set of string IDs."""
+    """Load hidden video IDs from disk, merged with the always-hidden seed from env var."""
     try:
         os.makedirs(os.path.dirname(LIGHTTUBE_HIDDEN_FILE), exist_ok=True)
         with open(LIGHTTUBE_HIDDEN_FILE, 'r') as f:
-            return set(str(x) for x in json.load(f))
+            from_disk = set(str(x) for x in json.load(f))
     except Exception:
-        return set()
+        from_disk = set()
+    return from_disk | LIGHTTUBE_HIDDEN_SEED  # always include seeded IDs
 
 def save_hidden_videos(hidden):
     """Persist hidden video IDs to disk."""
