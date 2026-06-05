@@ -2259,8 +2259,6 @@ async function checkRelayAccess(walletAddr) {
     relayTier       = data.tier || 'none';
     relayFee        = data.fee_lcai;
     relayWalletAddr = data.relay_wallet || '';
-    // DEBUG — remove after testing
-    showToast(`Relay: ${data.tier} | access=${data.access} | wallet=${walletAddr.slice(0,10)}…`);
     updateRelayUI();
   } catch(e) {
     // silently ignore — relay is optional
