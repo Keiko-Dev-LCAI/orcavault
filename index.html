@@ -1606,17 +1606,27 @@ async function loadAndShowMemory(vaultId, idx) {
   try {
     let mem = currentMemories.find(m => m.idx === idx);
     if (!mem) {
-      // If not cached, fetch from V1 chain
       if (!currentVaultData) {
         const vm = await readContract.vaults(vaultId);
         const tmplObj = TEMPLATES.find(t => t.name === vm.template) || {emoji:'⭐'};
         currentVaultData = { id: vaultId, owner: vm.owner, name: vm.name, template: vm.template, templateEmoji: tmplObj.emoji, description: vm.description, createdAt: Number(vm.createdAt) };
       }
-      const filter = readContract.filters.MemoryAdded(vaultId, idx);
-      const events = await readContract.queryFilter(filter, 0, 'latest');
-      if (events.length === 0) throw new Error('Memory not found on chain');
-      const e = events[0];
-      mem = { idx: Number(e.args[1]), addedBy: e.args[2], memType: e.args[3], title: e.args[4], caption: e.args[5], date: e.args[6], dataURI: e.args[7], txHash: e.transactionHash, _isChunked: false };
+      if (idx >= 200000 && readContractV2) {
+        // V2 chunked memory — fetch MemoryCreated event directly
+        const memoryId = idx - 200000;
+        const mcFilter = readContractV2.filters.MemoryCreated(memoryId);
+        const mcEvents = await readContractV2.queryFilter(mcFilter, 0, 'latest');
+        if (mcEvents.length === 0) throw new Error('Memory not found on chain');
+        const e = mcEvents[0];
+        mem = { idx, _memoryId: memoryId, addedBy: e.args[1], memType: e.args[4], title: e.args[2], caption: e.args[3], date: '', dataURI: null, txHash: e.transactionHash, _source: 'v2chunked', _isChunked: true, _totalChunks: Number(e.args[5]) };
+      } else {
+        // V1 memory lookup
+        const filter = readContract.filters.MemoryAdded(vaultId, idx);
+        const events = await readContract.queryFilter(filter, 0, 'latest');
+        if (events.length === 0) throw new Error('Memory not found on chain');
+        const e = events[0];
+        mem = { idx: Number(e.args[1]), addedBy: e.args[2], memType: e.args[3], title: e.args[4], caption: e.args[5], date: e.args[6], dataURI: e.args[7], txHash: e.transactionHash, _isChunked: false };
+      }
     }
 
     // Chunked reassembly
