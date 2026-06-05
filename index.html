@@ -1175,12 +1175,30 @@ let relayTier       = 'none';  // 'owner' | 'paid' | 'none'
 let relayFee        = null;    // current signup fee in LCAI (null = paused)
 let relayWalletAddr = '';      // relay wallet address (for payment instructions)
 let readContractV3  = null;    // read-only V3 contract
+
+// ── ADMIN / MODERATION STATE ──
+const OV_ADMIN_WALLETS = [
+  '0xa3a653a8cba0710ff57ac34e2278c603b4259fd3',
+  '0x2b6b64cc13dd6d5acabcf3a5dd72b6ee8004de35',
+];
+let isAdmin         = false;
+let hiddenMemories  = new Set();
+let _ovAdminKey     = null;
 let contractV3      = null;    // signer V3 contract
 
 // ════════════════════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════════════════════
+async function loadOVHidden() {
+  try {
+    const res = await fetch(`${RELAY_URL}/api/orcavault/hidden`);
+    const data = await res.json();
+    hiddenMemories = new Set((data.hidden || []).map(String));
+  } catch(e) { hiddenMemories = new Set(); }
+}
+
 window.addEventListener('load', () => {
+  loadOVHidden();
   initReadProvider();
   renderTemplatePicker('landing-template-grid', (t) => {
     selectedTemplate = t;
@@ -1270,6 +1288,7 @@ async function connectWallet() {
     if (V3_CONTRACT_ADDRESS) {
       contractV3 = new ethers.Contract(V3_CONTRACT_ADDRESS, V3_ABI, signer);
     }
+    isAdmin = OV_ADMIN_WALLETS.includes(wallet.toLowerCase());
     hideLoading();
     updateNavWallet();
     updateRecoveryPanels();
@@ -1286,6 +1305,7 @@ async function connectWallet() {
 function disconnectWallet() {
   wallet = null; provider = null; signer = null; contract = null; contractV2 = null; contractV3 = null;
   relayAccess = false; relayTier = 'none'; relayFee = null; relayWalletAddr = '';
+  isAdmin = false; _ovAdminKey = null;
   const bc = document.getElementById('btn-connect'); if (bc) bc.style.display = '';
   document.getElementById('btn-disconnect').style.display = 'none';
   document.getElementById('btn-my-archives').style.display = 'none';
@@ -1305,6 +1325,37 @@ function updateNavWallet() {
 }
 
 function shortAddr(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : ''; }
+
+// ── ADMIN / MODERATION ──
+async function ovAdminToggle(memoryId, btn) {
+  if (!isAdmin) return;
+  const isHidden = hiddenMemories.has(String(memoryId));
+  if (!isHidden && !_ovAdminKey) {
+    _ovAdminKey = prompt('Admin key:');
+    if (!_ovAdminKey) return;
+  }
+  try {
+    const endpoint = isHidden ? '/api/orcavault/unhide' : '/api/orcavault/hide';
+    const res = await fetch(`${RELAY_URL}${endpoint}`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ memoryId: String(memoryId), adminKey: _ovAdminKey }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401) { _ovAdminKey = null; }
+      showToast(data.error || 'Failed', true); return;
+    }
+    if (isHidden) {
+      hiddenMemories.delete(String(memoryId));
+      showToast('Memory restored');
+    } else {
+      hiddenMemories.add(String(memoryId));
+      showToast('Memory hidden from public view');
+    }
+    renderMemoriesGrid();
+  } catch(e) { showToast('Error: ' + e.message, true); }
+}
 
 // ── RECOVERY INFO HELPERS ──
 function recoveryCopy(elemId, btn) {
@@ -1636,6 +1687,8 @@ function renderMemoriesGrid() {
   }
   let html = `<div class="memory-grid">`;
   currentMemories.forEach((m, i) => {
+    const isHidden = hiddenMemories.has(String(m.idx));
+    if (isHidden && !isAdmin) return; // non-admins never see hidden memories
     const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄'};
     const icon = typeIcons[m.memType] || '📎';
     let thumbHtml = '';
@@ -1645,7 +1698,6 @@ function renderMemoriesGrid() {
       thumbHtml = `<div class="memory-thumb-placeholder">${icon}</div>`;
     }
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
-    // For chunked memories, use cache if available, otherwise show type icon placeholder
     let cardThumb = thumbHtml;
     if (m._isChunked) {
       if (chunkCache.has(m._memoryId)) {
@@ -1656,15 +1708,20 @@ function renderMemoriesGrid() {
           cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
         }
       } else {
-        // Not in cache — just show the type icon, content loads when user clicks
         cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
       }
     }
     const shareUrl = `${location.origin}${location.pathname}?vault=${currentVaultId}&item=${m.idx}`;
+    const adminBtn = isAdmin
+      ? `<button class="chain-link-btn" style="background:rgba(232,82,82,0.15);border:1px solid #e85252;color:#e85252" onclick="event.stopPropagation();ovAdminToggle(${m.idx},this)">${isHidden ? '✅ Unhide' : '🗑️ Remove'}</button>`
+      : '';
+    const hiddenBadge = isAdmin && isHidden ? `<span class="chunked-badge" style="background:rgba(232,82,82,0.12);border-color:rgba(232,82,82,0.4);color:#e85252">🚫 Hidden</span>` : '';
     const chainRow = `<div class="chain-link-row">
       <button class="chain-link-btn" onclick="event.stopPropagation();copyMemoryLink('${shareUrl}',this)" style="background:rgba(232,184,75,0.15);border-color:var(--gold);color:var(--gold);font-weight:700">📤 Share</button>
       ${m.txHash ? `<a class="chain-link-btn" href="${LIGHTSCAN_TX}${m.txHash}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔗 Chain</a>` : ''}
       ${m._isChunked ? `<span class="chunked-badge">⛓ ${m._totalChunks} chunks</span>` : ''}
+      ${hiddenBadge}
+      ${adminBtn}
     </div>`;
     html += `<div class="memory-card" onclick="viewMemory(${m.idx})">
       ${cardThumb}
@@ -2660,5 +2717,8 @@ function copyMemoryLink(url, btn) {
     .catch(() => showToast('Copy failed', true));
 }
 </script>
+<footer style="background:var(--bg2);border-top:1px solid var(--border);padding:18px 32px;text-align:center;font-size:15px;color:var(--muted);line-height:1.65;margin-top:40px">
+  Free to browse · Uploads may require a small LCAI fee · Content that violates community standards will be hidden from this app. Note: all uploads are permanently recorded on the Lightchain blockchain and cannot be erased from the chain — only removed from this interface.
+</footer>
 </body>
 </html>
