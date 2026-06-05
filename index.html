@@ -822,7 +822,7 @@ footer a{color:var(--gold);text-decoration:none}
       <input class="form-input" id="mem-date" type="date">
     </div>
 
-    <div class="warn-banner">⛽ <strong>Small files</strong> (&lt;90KB): stored in one transaction. <strong>Large files</strong>: stored in chunks via OrcaVault V2 (deploy V2 first). Videos &lt;78KB work without V2 — use ffmpeg helper for larger clips. Gas &lt;$0.001 per tx. Make sure you have LCAI in your wallet.</div>
+    <div class="warn-banner">⛽ <strong>Files under 1MB</strong>: stored in one transaction. <strong>Larger files</strong>: automatically split into 1MB chunks — any size supported. Gas is essentially free on Lightchain. Make sure you have LCAI in your wallet.</div>
 
     <div style="display:flex;gap:12px;margin-top:8px">
       <button class="btn btn-outline" onclick="goViewVaultCurrent()">← Cancel</button>
@@ -1857,7 +1857,7 @@ async function processFile(file) {
   } else {
     const kb = Math.round(file.size / 1024);
     const MAX_VIDEO_BYTES = 78 * 1024;   // 78KB
-    const MAX_OTHER_BYTES = 90 * 1024;   // 90KB
+    const MAX_OTHER_BYTES = 1024 * 1024;  // 1MB
     const isVideo = currentMemType === 'video';
     const isAudio = currentMemType === 'audio';
 
@@ -1952,7 +1952,7 @@ function acceptTerms() {
 
 /** Returns chunk-estimate info for a given byte size */
 function estimateUpload(byteSize) {
-  const CHUNK_SIZE = 90 * 1024;
+  const CHUNK_SIZE = 1024 * 1024; // 1MB chunks — Lightchain 60M gas limit supports this
   const chunks = Math.ceil(byteSize / CHUNK_SIZE);
   const totalTx = 1 + chunks; // 1 initMemory + N addChunk
   const totalSecs = totalTx * 3;
@@ -1964,8 +1964,8 @@ function estimateUpload(byteSize) {
   };
 }
 
-/** Split a base64 string into ≤90KB chunks */
-function chunkBase64(dataURI, chunkSize = 90 * 1024) {
+/** Split a base64 string into ≤1MB chunks */
+function chunkBase64(dataURI, chunkSize = 1024 * 1024) {
   const chunks = [];
   for (let i = 0; i < dataURI.length; i += chunkSize) {
     chunks.push(dataURI.slice(i, i + chunkSize));
@@ -2014,7 +2014,7 @@ async function storeMemory() {
   btn.disabled = true;
 
   // Route: chunked (V2) or single (V1/V2)
-  if (dataURI.length > 90 * 1024 && V2_CONTRACT_ADDRESS && contractV2) {
+  if (dataURI.length > 1024 * 1024 && V2_CONTRACT_ADDRESS && contractV2) {
     const { chunks, totalTx, estimatedMinutes, estimatedSeconds } = estimateUpload(dataURI.length);
     const fileMB = (dataURI.length / 1024 / 1024).toFixed(2);
     const timeStr = estimatedMinutes > 0
