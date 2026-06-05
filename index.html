@@ -822,9 +822,22 @@ footer a{color:var(--gold);text-decoration:none}
       <input class="form-input" id="mem-date" type="date">
     </div>
 
-    <div class="warn-banner">⛽ <strong>Files under 1MB</strong>: stored in one transaction. <strong>Larger files</strong>: automatically split into 1MB chunks — any size supported. Gas is essentially free on Lightchain. Make sure you have LCAI in your wallet.</div>
+    <div class="warn-banner">⛽ <strong>Files under 2MB</strong>: stored in one transaction. <strong>Larger files</strong>: automatically split into 2MB chunks — any size supported. Gas is essentially free on Lightchain. Make sure you have LCAI in your wallet.</div>
 
-    <div style="display:flex;gap:12px;margin-top:8px">
+    <!-- ⚡ One-click relay upload (shown when wallet has relay access) -->
+    <div id="relay-upload-section" style="display:none;margin-top:8px">
+      <button class="btn btn-gold" id="btn-relay-upload" onclick="doRelayUpload()" style="width:100%;justify-content:center;min-height:60px;font-size:22px;background:linear-gradient(135deg,#1a9f5a,#0d7a42);border-color:#0d7a42">⚡ One-Click Upload — No Wallet Confirmations</button>
+      <p style="text-align:center;color:var(--muted);font-size:16px;margin:10px 0 0">The relay signs all blockchain transactions for you. Your file is stored on-chain — you just click once.</p>
+    </div>
+
+    <!-- 🔓 Unlock relay (shown when wallet connected but not yet a relay member) -->
+    <div id="relay-unlock-section" style="display:none;margin-top:8px;background:rgba(232,184,75,0.06);border:1.5px solid rgba(232,184,75,0.25);border-radius:14px;padding:18px 20px">
+      <div style="font-size:19px;font-weight:700;color:var(--gold);margin-bottom:6px">⚡ Tired of tapping Confirm 30+ times?</div>
+      <div style="font-size:17px;color:var(--text);margin-bottom:12px">Pay <strong><span id="relay-fee-display">2</span> LCAI once</strong> to unlock one-click uploads forever. No more wallet popups — the relay handles every transaction for you.</div>
+      <button class="btn btn-outline" onclick="showRelayUnlockModal()" style="font-size:17px;padding:11px 22px">Unlock One-Click Uploads →</button>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-top:12px">
       <button class="btn btn-outline" onclick="goViewVaultCurrent()">← Cancel</button>
       <button class="btn btn-gold" id="btn-store-memory" onclick="storeMemory()" style="flex:1;justify-content:center;min-height:60px;font-size:22px">⛓️ Store Forever on Lightchain</button>
     </div>
@@ -894,6 +907,29 @@ footer a{color:var(--gold);text-decoration:none}
     <div style="display:flex;gap:12px">
       <button class="btn btn-outline" onclick="cancelChunkUpload()" style="flex:1;justify-content:center">✕ Cancel</button>
       <button class="btn btn-gold" id="btn-start-chunk" onclick="startChunkUpload()" style="flex:2;justify-content:center">🚀 Start Upload</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── RELAY UNLOCK MODAL ── -->
+<div id="modal-relay-unlock" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:560px">
+    <div style="font-size:48px;margin-bottom:12px;text-align:center">⚡</div>
+    <div class="modal-title">Unlock One-Click Uploads</div>
+    <div class="modal-sub">One payment. One-click uploads forever — no more wallet confirmations on every file.</div>
+    <div style="background:rgba(232,184,75,0.08);border:1.5px solid var(--gold);border-radius:14px;padding:20px;margin:16px 0;font-size:18px;line-height:2">
+      <div style="color:var(--muted);font-size:16px;margin-bottom:6px">Step 1 — Send <strong><span id="relay-unlock-fee-display">2</span> LCAI</strong> to this address in your Trust Wallet:</div>
+      <div id="relay-unlock-wallet-addr" style="font-family:monospace;font-size:15px;word-break:break-all;color:var(--gold);background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;user-select:all">loading...</div>
+      <button class="btn btn-sm btn-outline" onclick="navigator.clipboard.writeText(document.getElementById('relay-unlock-wallet-addr').textContent).then(()=>showToast('Address copied!'))" style="margin-top:10px;font-size:15px">📋 Copy Address</button>
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border-radius:12px;padding:16px 18px;margin-bottom:16px;font-size:17px;color:var(--text);line-height:1.7">
+      <strong>Step 2</strong> — After sending, copy your transaction hash from Trust Wallet and paste it here:
+    </div>
+    <input class="form-input" id="relay-payment-txhash" placeholder="Paste transaction hash: 0x..." style="margin-bottom:16px;font-size:16px;font-family:monospace">
+    <div style="font-size:15px;color:var(--muted);margin-bottom:18px">The server will verify your payment on-chain and unlock your access instantly. You only need to do this once — ever.</div>
+    <div style="display:flex;gap:12px">
+      <button class="btn btn-outline" onclick="document.getElementById('modal-relay-unlock').classList.add('hidden')" style="flex:1;justify-content:center">Cancel</button>
+      <button class="btn btn-gold" id="btn-relay-verify" onclick="submitRelayPayment()" style="flex:2;justify-content:center;font-size:18px">✅ I've Paid — Verify &amp; Unlock</button>
     </div>
   </div>
 </div>
@@ -1073,6 +1109,16 @@ const V2_ABI = [
 ];
 const LIGHTSCAN_TX = 'https://lightscan.lightchain.ai/tx/';
 
+// ── V3 CONFIG (relay-enabled, one-click uploads) ──
+const V3_CONTRACT_ADDRESS = '0x5262424DcF7e810575700a28C7Ec8A6d3dd4A0dA'; // OrcaVaultV3 — relay + direct chunked, deployed 2026-06-05
+const RELAY_URL           = ''; // Railway relay server URL — fill in after deploy
+const V3_ABI = [
+  "function getMemoryCount() view returns (uint256)",
+  "function getOwnerMemories(address) view returns (uint256[])",
+  "event MemoryCreated(uint256 indexed memoryId, address indexed owner, string title, string description, string mediaType, uint256 totalChunks, string template, uint256 timestamp)",
+  "event ChunkStored(uint256 indexed memoryId, uint256 indexed chunkIndex, uint256 totalChunks, string chunkData)"
+];
+
 const ABI = [
   "function createVault(string name, string template, string description) external returns (uint256)",
   "function addMemory(uint256 vaultId, string memType, string title, string caption, string date, string dataURI) external",
@@ -1123,6 +1169,14 @@ let contractV2       = null;   // signer V2 contract
 let pendingChunkUpload = null; // { title, caption, date, dataURI, memType }
 const chunkCache     = new Map(); // memoryId (number) → assembled dataURI
 
+// ── RELAY + V3 STATE ──
+let relayAccess     = false;   // has relay access (owner or paid)
+let relayTier       = 'none';  // 'owner' | 'paid' | 'none'
+let relayFee        = null;    // current signup fee in LCAI (null = paused)
+let relayWalletAddr = '';      // relay wallet address (for payment instructions)
+let readContractV3  = null;    // read-only V3 contract
+let contractV3      = null;    // signer V3 contract
+
 // ════════════════════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════════════════════
@@ -1147,6 +1201,9 @@ function initReadProvider() {
     readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, readProvider);
     if (V2_CONTRACT_ADDRESS) {
       readContractV2 = new ethers.Contract(V2_CONTRACT_ADDRESS, V2_ABI, readProvider);
+    }
+    if (V3_CONTRACT_ADDRESS) {
+      readContractV3 = new ethers.Contract(V3_CONTRACT_ADDRESS, V3_ABI, readProvider);
     }
   } catch(e) { console.warn('Read provider init:', e); }
 }
@@ -1210,10 +1267,14 @@ async function connectWallet() {
     if (V2_CONTRACT_ADDRESS) {
       contractV2 = new ethers.Contract(V2_CONTRACT_ADDRESS, V2_ABI, signer);
     }
+    if (V3_CONTRACT_ADDRESS) {
+      contractV3 = new ethers.Contract(V3_CONTRACT_ADDRESS, V3_ABI, signer);
+    }
     hideLoading();
     updateNavWallet();
     updateRecoveryPanels();
     showToast('Wallet connected! ' + shortAddr(wallet));
+    if (RELAY_URL && V3_CONTRACT_ADDRESS) { checkRelayAccess(wallet); }
     return true;
   } catch(e) {
     hideLoading();
@@ -1223,12 +1284,14 @@ async function connectWallet() {
 }
 
 function disconnectWallet() {
-  wallet = null; provider = null; signer = null; contract = null; contractV2 = null;
+  wallet = null; provider = null; signer = null; contract = null; contractV2 = null; contractV3 = null;
+  relayAccess = false; relayTier = 'none'; relayFee = null; relayWalletAddr = '';
   const bc = document.getElementById('btn-connect'); if (bc) bc.style.display = '';
   document.getElementById('btn-disconnect').style.display = 'none';
   document.getElementById('btn-my-archives').style.display = 'none';
   document.getElementById('nav-wallet-addr').style.display = 'none';
   document.getElementById('sv-add-btn-wrap').style.display = 'none';
+  updateRelayUI();
   showScreen('landing');
 }
 
@@ -1521,6 +1584,33 @@ async function loadAndShowVault(vaultId) {
       }
     }
 
+    // Load V3 relay-uploaded memories (same owner, different contract)
+    if (V3_CONTRACT_ADDRESS && readContractV3) {
+      try {
+        const ownerAddr = currentVaultData.owner;
+        const v3filter  = readContractV3.filters.MemoryCreated(null, ownerAddr);
+        const v3events  = await readContractV3.queryFilter(v3filter, 0, 'latest');
+        const v3Chunked = v3events.map(e => ({
+          idx:          300000 + Number(e.args[0]),
+          _memoryId:    Number(e.args[0]),
+          addedBy:      e.args[1],
+          memType:      e.args[4],
+          title:        e.args[2],
+          caption:      e.args[3],
+          date:         '',
+          dataURI:      null,
+          txHash:       e.transactionHash,
+          _source:      'v3relay',
+          _isChunked:   true,
+          _totalChunks: Number(e.args[5]),
+          _contract:    'v3',
+        }));
+        allMems = allMems.concat(v3Chunked);
+      } catch(v3err) {
+        console.warn('V3 read error (non-fatal):', v3err);
+      }
+    }
+
     currentMemories = allMems.sort((a, b) => a.idx - b.idx);
     document.getElementById('sv-count').textContent = currentMemories.length;
     hideLoading();
@@ -1611,7 +1701,15 @@ async function loadAndShowMemory(vaultId, idx) {
         const tmplObj = TEMPLATES.find(t => t.name === vm.template) || {emoji:'⭐'};
         currentVaultData = { id: vaultId, owner: vm.owner, name: vm.name, template: vm.template, templateEmoji: tmplObj.emoji, description: vm.description, createdAt: Number(vm.createdAt) };
       }
-      if (idx >= 200000 && readContractV2) {
+      if (idx >= 300000 && readContractV3) {
+        // V3 relay-uploaded memory — fetch MemoryCreated event directly
+        const memoryId = idx - 300000;
+        const mcFilter = readContractV3.filters.MemoryCreated(memoryId);
+        const mcEvents = await readContractV3.queryFilter(mcFilter, 0, 'latest');
+        if (mcEvents.length === 0) throw new Error('Memory not found on V3 chain');
+        const e = mcEvents[0];
+        mem = { idx, _memoryId: memoryId, addedBy: e.args[1], memType: e.args[4], title: e.args[2], caption: e.args[3], date: '', dataURI: null, txHash: e.transactionHash, _source: 'v3relay', _contract: 'v3', _isChunked: true, _totalChunks: Number(e.args[5]) };
+      } else if (idx >= 200000 && readContractV2) {
         // V2 chunked memory — fetch MemoryCreated event directly
         const memoryId = idx - 200000;
         const mcFilter = readContractV2.filters.MemoryCreated(memoryId);
@@ -1629,18 +1727,22 @@ async function loadAndShowMemory(vaultId, idx) {
       }
     }
 
-    // Chunked reassembly
-    if (mem._isChunked && readContractV2) {
-      const memoryId = mem._memoryId;
-      if (chunkCache.has(memoryId)) {
-        mem = { ...mem, dataURI: chunkCache.get(memoryId) };
+    // Chunked reassembly — V2 or V3
+    if (mem._isChunked) {
+      const isV3      = mem._source === 'v3relay' || mem._contract === 'v3';
+      const cacheKey  = (isV3 ? 'v3-' : 'v2-') + mem._memoryId;
+      const readCtr   = isV3 ? readContractV3 : readContractV2;
+      if (!readCtr) {
+        showToast('Contract not available for reassembly', true);
+      } else if (chunkCache.has(cacheKey)) {
+        mem = { ...mem, dataURI: chunkCache.get(cacheKey) };
       } else {
         showLoading('Reassembling memory…', `Fetching ${mem._totalChunks} chunks from Lightchain — this may take a moment`);
-        const chunkFilter = readContractV2.filters.ChunkStored(memoryId);
-        const chunkEvents = await readContractV2.queryFilter(chunkFilter, 0, 'latest');
+        const chunkFilter = readCtr.filters.ChunkStored(mem._memoryId);
+        const chunkEvents = await readCtr.queryFilter(chunkFilter, 0, 'latest');
         chunkEvents.sort((a, b) => Number(a.args[1]) - Number(b.args[1]));
         const assembled = chunkEvents.map(e => e.args[3]).join('');
-        chunkCache.set(memoryId, assembled);
+        chunkCache.set(cacheKey, assembled);
         mem = { ...mem, dataURI: assembled };
       }
     }
@@ -2138,6 +2240,142 @@ async function doChunkedUpload(title, caption, date, dataURI, memType) {
     overlay.style.display = 'none';
     document.getElementById('btn-store-memory').disabled = false;
     showToast('Chunked upload failed: ' + (e.reason || e.message || e), true);
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  RELAY — ONE-CLICK UPLOADS
+// ════════════════════════════════════════════════════════
+
+async function checkRelayAccess(walletAddr) {
+  if (!RELAY_URL) return;
+  try {
+    const resp = await fetch(`${RELAY_URL}/api/check-access?wallet=${encodeURIComponent(walletAddr)}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    relayAccess     = !!data.access;
+    relayTier       = data.tier || 'none';
+    relayFee        = data.fee_lcai;
+    relayWalletAddr = data.relay_wallet || '';
+    updateRelayUI();
+  } catch(e) {
+    // silently ignore — relay is optional
+  }
+}
+
+function updateRelayUI() {
+  const uploadSection = document.getElementById('relay-upload-section');
+  const unlockSection = document.getElementById('relay-unlock-section');
+  if (!uploadSection || !unlockSection) return;
+  if (relayAccess) {
+    uploadSection.style.display = '';
+    unlockSection.style.display = 'none';
+  } else if (RELAY_URL && wallet && relayFee !== null) {
+    uploadSection.style.display = 'none';
+    unlockSection.style.display = '';
+    const feeEl = document.getElementById('relay-fee-display');
+    if (feeEl) feeEl.textContent = relayFee;
+  } else {
+    uploadSection.style.display = 'none';
+    unlockSection.style.display = 'none';
+  }
+}
+
+async function doRelayUpload() {
+  if (!wallet) { showToast('Please connect your wallet first', true); return; }
+  if (!relayAccess) { showToast('No relay access — unlock one-click uploads first', true); return; }
+  if (!RELAY_URL)   { showToast('Relay server not configured yet', true); return; }
+
+  const title = (document.getElementById('mem-title')?.value || '').trim();
+  if (!title) { showToast('Please enter a title', true); return; }
+
+  let dataURI = '';
+  const textContent = (document.getElementById('mem-text-content')?.value || '').trim();
+  if (currentMemType === 'text') {
+    if (!textContent) { showToast('Please enter text content', true); return; }
+    dataURI = 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(textContent)));
+  } else {
+    if (!pendingFileDataURI) { showToast('Please upload a file first', true); return; }
+    dataURI = pendingFileDataURI;
+  }
+
+  if (!termsAccepted) { showTermsModal(() => doRelayUpload()); return; }
+
+  const caption  = (document.getElementById('mem-caption')?.value || '').trim();
+  const tmplName = (currentVaultData && currentVaultData.template) ? currentVaultData.template : '';
+  const btn      = document.getElementById('btn-relay-upload');
+  if (btn) btn.disabled = true;
+
+  showLoading('Sending to relay…', 'No wallet confirmations needed. The relay is handling all transactions — this may take a minute for large files.');
+
+  try {
+    const resp = await fetch(`${RELAY_URL}/api/relay-upload`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        ownerAddress: wallet,
+        title:        title,
+        caption:      caption,
+        memType:      currentMemType || 'document',
+        template:     tmplName,
+        dataURI:      dataURI,
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) throw new Error(data.error || 'Relay upload failed');
+
+    hideLoading();
+    if (btn) btn.disabled = false;
+    resetAddMemoryForm();
+    updateRecoveryPanels();
+    showToast(`✅ Uploaded! Memory ID: ${data.memoryId} — stored in ${data.totalChunks} chunk${data.totalChunks === 1 ? '' : 's'}, no wallet taps needed.`);
+    loadAndShowVault(currentVaultId);
+  } catch(e) {
+    hideLoading();
+    if (btn) btn.disabled = false;
+    showToast('Relay upload failed: ' + (e.message || e), true);
+  }
+}
+
+function showRelayUnlockModal() {
+  const walletEl = document.getElementById('relay-unlock-wallet-addr');
+  const feeEl    = document.getElementById('relay-unlock-fee-display');
+  if (walletEl) walletEl.textContent = relayWalletAddr || 'Connect wallet first';
+  if (feeEl)    feeEl.textContent    = relayFee || '2';
+  document.getElementById('modal-relay-unlock').classList.remove('hidden');
+}
+
+async function submitRelayPayment() {
+  const txHash = (document.getElementById('relay-payment-txhash')?.value || '').trim();
+  if (!txHash) { showToast('Please paste your transaction hash', true); return; }
+  if (!wallet)  { showToast('Wallet not connected', true); return; }
+
+  const btn = document.getElementById('btn-relay-verify');
+  if (btn) btn.disabled = true;
+
+  showLoading('Verifying payment on-chain…', 'Checking your transaction on the Lightchain network…');
+
+  try {
+    const resp = await fetch(`${RELAY_URL}/api/register-payment`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ walletAddress: wallet, txHash: txHash })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) throw new Error(data.error || 'Verification failed');
+
+    hideLoading();
+    relayAccess = true;
+    relayTier   = 'paid';
+    updateRelayUI();
+    document.getElementById('modal-relay-unlock').classList.add('hidden');
+    document.getElementById('relay-payment-txhash').value = '';
+    if (btn) btn.disabled = false;
+    showToast('🎉 One-click uploads unlocked forever! The ⚡ button is now active.');
+  } catch(e) {
+    hideLoading();
+    if (btn) btn.disabled = false;
+    showToast('Verification failed: ' + (e.message || e) + ' — make sure the transaction is confirmed on-chain, then try again.', true);
   }
 }
 
