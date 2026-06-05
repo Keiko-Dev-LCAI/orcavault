@@ -58,7 +58,7 @@ LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
 # Comma-separated video IDs that are ALWAYS hidden (survives redeploys without a volume)
 LIGHTTUBE_HIDDEN_SEED    = {s.strip() for s in os.environ.get("LIGHTTUBE_HIDDEN_IDS", "").split(",") if s.strip()}
 LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
-CHUNK_SIZE               = 2 * 1024 * 1024   # 2MB chunks
+CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
 CHAIN_ID                 = 9200
 
 # LightTubeV2 ABI (relay functions only)
