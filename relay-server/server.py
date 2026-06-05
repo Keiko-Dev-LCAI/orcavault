@@ -34,11 +34,12 @@ Optional:
   PAID_WALLETS_FILE        = path to persistent JSON file (default: /data/paid_wallets.json)
 """
 
-import os, json, time
+import os, json, time, uuid, base64, threading
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from web3 import Web3
 from eth_account import Account
+from eth_account.messages import encode_defunct
 
 app = Flask(__name__)
 CORS(app)
@@ -56,8 +57,34 @@ LIGHTTUBE_HIDDEN_FILE    = os.environ.get("LIGHTTUBE_HIDDEN_FILE", "/data/lightt
 LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
 # Comma-separated video IDs that are ALWAYS hidden (survives redeploys without a volume)
 LIGHTTUBE_HIDDEN_SEED    = {s.strip() for s in os.environ.get("LIGHTTUBE_HIDDEN_IDS", "").split(",") if s.strip()}
-CHUNK_SIZE               = 2 * 1024 * 1024   # 2MB chunks (matches client)
+LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
+CHUNK_SIZE               = 2 * 1024 * 1024   # 2MB chunks
 CHAIN_ID                 = 9200
+
+# LightTubeV2 ABI (relay functions only)
+LIGHTTUBE_V2_ABI = [
+    {"inputs":[{"name":"uploader","type":"address"},{"name":"title","type":"string"},
+               {"name":"description","type":"string"},{"name":"category","type":"string"},
+               {"name":"totalChunks","type":"uint256"}],
+     "name":"initVideoFor","outputs":[{"type":"uint256"}],
+     "stateMutability":"nonpayable","type":"function"},
+    {"inputs":[{"name":"videoId","type":"uint256"},{"name":"chunkIndex","type":"uint256"},
+               {"name":"chunkData","type":"string"}],
+     "name":"addVideoChunkFor","outputs":[],
+     "stateMutability":"nonpayable","type":"function"},
+    {"anonymous":False,"inputs":[
+        {"indexed":True,"name":"videoId","type":"uint256"},
+        {"indexed":True,"name":"uploader","type":"address"},
+        {"indexed":False,"name":"title","type":"string"},
+        {"indexed":False,"name":"description","type":"string"},
+        {"indexed":False,"name":"category","type":"string"},
+        {"indexed":False,"name":"totalChunks","type":"uint256"},
+        {"indexed":False,"name":"timestamp","type":"uint256"}],
+     "name":"VideoCreated","type":"event"},
+]
+
+# In-memory upload job tracker  {jobId: {status, progress, total, videoId, error}}
+lt_upload_jobs = {}
 
 def current_fee_lcai(relay_balance: float) -> float:
     """
@@ -150,6 +177,126 @@ def save_paid_wallets(wallets):
             json.dump(list(wallets), f)
     except Exception as e:
         print(f"Warning: could not save paid_wallets: {e}")
+
+# ─── LightTube relay upload ───────────────────────────────────────────────────
+
+def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri):
+    """Background thread: chunk and store a video via LightTubeV2 relay functions."""
+    job = lt_upload_jobs[job_id]
+    try:
+        if not LIGHTTUBE_V2_ADDRESS:
+            raise Exception("LIGHTTUBE_V2_ADDRESS not configured")
+        w3 = Web3(Web3.HTTPProvider(RPC_URL))
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        contract   = w3.eth.contract(
+            address=Web3.to_checksum_address(LIGHTTUBE_V2_ADDRESS),
+            abi=LIGHTTUBE_V2_ABI
+        )
+        chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
+        job['total'] = len(chunks)
+
+        # ── initVideoFor ──────────────────────────────────────────────
+        job['status'] = 'initializing'
+        nonce = w3.eth.get_transaction_count(relay_acct.address, 'pending')
+        tx = contract.functions.initVideoFor(
+            Web3.to_checksum_address(user_wallet), title, description, category, len(chunks)
+        ).build_transaction({
+            'from':     relay_acct.address,
+            'nonce':    nonce,
+            'gas':      300_000,
+            'gasPrice': w3.eth.gas_price,
+            'chainId':  CHAIN_ID,
+        })
+        signed  = w3.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
+        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+
+        # Parse videoId from VideoCreated event
+        ct_with_events = w3.eth.contract(
+            address=Web3.to_checksum_address(LIGHTTUBE_V2_ADDRESS),
+            abi=LIGHTTUBE_V2_ABI
+        )
+        logs    = ct_with_events.events.VideoCreated().process_receipt(receipt)
+        video_id = int(logs[0]['args']['videoId'])
+        job['videoId'] = video_id
+        job['status']  = 'uploading'
+        nonce += 1
+
+        # ── addVideoChunkFor × N ──────────────────────────────────────
+        for i, chunk in enumerate(chunks):
+            tx = contract.functions.addVideoChunkFor(video_id, i, chunk).build_transaction({
+                'from':     relay_acct.address,
+                'nonce':    nonce,
+                'gas':      40_000_000,
+                'gasPrice': w3.eth.gas_price,
+                'chainId':  CHAIN_ID,
+            })
+            signed  = w3.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            nonce += 1
+            job['progress'] = i + 1
+
+        job['status'] = 'complete'
+    except Exception as e:
+        job['status'] = 'error'
+        job['error']  = str(e)
+        print(f"LightTube upload error [{job_id}]: {e}")
+
+
+@app.route('/api/lighttube/upload', methods=['POST'])
+def lighttube_upload():
+    """
+    Relay-upload a video to LightTubeV2 on behalf of a user wallet.
+    Form fields: wallet, signature, title, description, category, timestamp
+    File field:  video  (multipart/form-data)
+    """
+    wallet     = request.form.get('wallet', '').strip().lower()
+    signature  = request.form.get('signature', '').strip()
+    title      = request.form.get('title', '').strip()
+    description= request.form.get('description', '').strip()
+    category   = request.form.get('category', 'Other').strip()
+    timestamp  = request.form.get('timestamp', '').strip()
+    video_file = request.files.get('video')
+
+    if not wallet or not signature or not title or not video_file:
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    # Verify wallet signature
+    message = f"Upload to LightTube\nTitle: {title}\nWallet: {wallet}\nTimestamp: {timestamp}"
+    try:
+        msg       = encode_defunct(text=message)
+        recovered = Account.recover_message(msg, signature=signature).lower()
+        if recovered != wallet:
+            return jsonify({'error': 'Signature does not match wallet'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature error: {e}'}), 401
+
+    # Build base64 data URI
+    mime      = video_file.content_type or 'video/mp4'
+    raw_bytes = video_file.read()
+    data_uri  = f"data:{mime};base64,{base64.b64encode(raw_bytes).decode()}"
+
+    # Launch background upload
+    job_id = str(uuid.uuid4())
+    lt_upload_jobs[job_id] = {
+        'status': 'pending', 'progress': 0, 'total': 0, 'videoId': None, 'error': None
+    }
+    t = threading.Thread(target=_do_lt_upload,
+                         args=(job_id, wallet, title, description, category, data_uri),
+                         daemon=True)
+    t.start()
+    return jsonify({'jobId': job_id})
+
+
+@app.route('/api/lighttube/upload-progress/<job_id>', methods=['GET'])
+def lighttube_upload_progress(job_id):
+    """Poll upload job status. Returns {status, progress, total, videoId, error}."""
+    job = lt_upload_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify(job)
+
 
 # ─── LightTube hidden video registry ─────────────────────────────────────────
 
