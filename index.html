@@ -2056,7 +2056,7 @@ function acceptTerms() {
 
 /** Returns chunk-estimate info for a given byte size */
 function estimateUpload(byteSize) {
-  const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks — ~32M gas, well within 60M limit
+  const CHUNK_SIZE = 90_000; // 90KB — Lightchain RPC hard limit is 128KB per transaction
   const chunks = Math.ceil(byteSize / CHUNK_SIZE);
   const totalTx = 1 + chunks; // 1 initMemory + N addChunk
   const totalSecs = totalTx * 3;
@@ -2068,8 +2068,8 @@ function estimateUpload(byteSize) {
   };
 }
 
-/** Split a base64 string into ≤1MB chunks */
-function chunkBase64(dataURI, chunkSize = 2 * 1024 * 1024) {
+/** Split a base64 data URI into 90KB chunks (Lightchain RPC 128KB/tx limit) */
+function chunkBase64(dataURI, chunkSize = 90_000) {
   const chunks = [];
   for (let i = 0; i < dataURI.length; i += chunkSize) {
     chunks.push(dataURI.slice(i, i + chunkSize));
