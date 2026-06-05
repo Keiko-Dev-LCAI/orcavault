@@ -48,7 +48,7 @@ CORS(app)
 RPC_URL                  = "https://rpc.mainnet.lightchain.ai"
 RELAY_PRIVATE_KEY        = os.environ.get("RELAY_PRIVATE_KEY", "")
 V3_CONTRACT_ADDRESS      = os.environ.get("V3_CONTRACT_ADDRESS", "")
-OWNER_WALLET             = os.environ.get("OWNER_WALLET", "").lower()
+OWNER_WALLETS            = {w.strip().lower() for w in os.environ.get("OWNER_WALLET", "").split(",") if w.strip()}
 BASE_FEE_LCAI            = float(os.environ.get("RELAY_FEE_LCAI", "2.0"))
 LOW_BALANCE_THRESHOLD    = float(os.environ.get("LOW_BALANCE_THRESHOLD", "10.0"))
 PAID_WALLETS_FILE        = os.environ.get("PAID_WALLETS_FILE", "/data/paid_wallets.json")
@@ -150,7 +150,7 @@ def save_paid_wallets(wallets):
 def has_relay_access(wallet_address: str) -> bool:
     """True if wallet is owner (free) or has paid."""
     addr = wallet_address.lower()
-    if OWNER_WALLET and addr == OWNER_WALLET:
+    if addr in OWNER_WALLETS:
         return True
     paid = load_paid_wallets()
     return addr in paid
@@ -192,7 +192,7 @@ def check_access():
     fee          = current_fee_lcai(balance_lcai)
     addr         = wallet.lower()
 
-    if OWNER_WALLET and addr == OWNER_WALLET:
+    if addr in OWNER_WALLETS:
         tier   = 'owner'
         access = True
     elif addr in load_paid_wallets():
@@ -237,7 +237,7 @@ def register_payment():
 
     # Already has access?
     if has_relay_access(wallet_address):
-        return jsonify({'success': True, 'message': 'Already has relay access', 'tier': 'owner' if wallet_address.lower() == OWNER_WALLET else 'paid'})
+        return jsonify({'success': True, 'message': 'Already has relay access', 'tier': 'owner' if wallet_address.lower() in OWNER_WALLETS else 'paid'})
 
     # Look up the transaction on-chain
     try:
