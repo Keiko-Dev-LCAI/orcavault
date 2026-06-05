@@ -52,6 +52,8 @@ OWNER_WALLETS            = {w.strip().lower() for w in os.environ.get("OWNER_WAL
 BASE_FEE_LCAI            = float(os.environ.get("RELAY_FEE_LCAI", "2.0"))
 LOW_BALANCE_THRESHOLD    = float(os.environ.get("LOW_BALANCE_THRESHOLD", "10.0"))
 PAID_WALLETS_FILE        = os.environ.get("PAID_WALLETS_FILE", "/data/paid_wallets.json")
+LIGHTTUBE_HIDDEN_FILE    = os.environ.get("LIGHTTUBE_HIDDEN_FILE", "/data/lighttube_hidden.json")
+LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
 CHUNK_SIZE               = 2 * 1024 * 1024   # 2MB chunks (matches client)
 CHAIN_ID                 = 9200
 
@@ -146,6 +148,26 @@ def save_paid_wallets(wallets):
             json.dump(list(wallets), f)
     except Exception as e:
         print(f"Warning: could not save paid_wallets: {e}")
+
+# ─── LightTube hidden video registry ─────────────────────────────────────────
+
+def load_hidden_videos():
+    """Load hidden video IDs from disk. Returns a set of string IDs."""
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUBE_HIDDEN_FILE), exist_ok=True)
+        with open(LIGHTTUBE_HIDDEN_FILE, 'r') as f:
+            return set(str(x) for x in json.load(f))
+    except Exception:
+        return set()
+
+def save_hidden_videos(hidden):
+    """Persist hidden video IDs to disk."""
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUBE_HIDDEN_FILE), exist_ok=True)
+        with open(LIGHTTUBE_HIDDEN_FILE, 'w') as f:
+            json.dump(list(hidden), f)
+    except Exception as e:
+        print(f"Warning: could not save hidden_videos: {e}")
 
 def has_relay_access(wallet_address: str) -> bool:
     """True if wallet is owner (free) or has paid."""
@@ -389,6 +411,59 @@ def relay_status():
         'paid_wallets': paid_count,
         'fee_lcai':     RELAY_FEE_LCAI,
     })
+
+@app.route('/api/lighttube/hidden', methods=['GET'])
+def lighttube_get_hidden():
+    """
+    Public endpoint — returns list of hidden video IDs for LightTube feed filtering.
+    No auth required: the list itself isn't sensitive.
+    """
+    hidden = load_hidden_videos()
+    return jsonify({'hidden': list(hidden)})
+
+@app.route('/api/lighttube/hide', methods=['POST'])
+def lighttube_hide():
+    """
+    Admin endpoint — hide a video from the LightTube feed.
+    Body: { videoId: "N", adminKey: "secret" }
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    video_id = body.get('videoId')
+    admin_key = body.get('adminKey', '')
+    if admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if video_id is None:
+        return jsonify({'error': 'videoId required'}), 400
+    hidden = load_hidden_videos()
+    hidden.add(str(video_id))
+    save_hidden_videos(hidden)
+    return jsonify({'success': True, 'hidden_count': len(hidden)})
+
+@app.route('/api/lighttube/unhide', methods=['POST'])
+def lighttube_unhide():
+    """
+    Admin endpoint — restore a hidden video to the LightTube feed.
+    Body: { videoId: "N", adminKey: "secret" }
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    video_id = body.get('videoId')
+    admin_key = body.get('adminKey', '')
+    if admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if video_id is None:
+        return jsonify({'error': 'videoId required'}), 400
+    hidden = load_hidden_videos()
+    hidden.discard(str(video_id))
+    save_hidden_videos(hidden)
+    return jsonify({'success': True, 'hidden_count': len(hidden)})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8190))
