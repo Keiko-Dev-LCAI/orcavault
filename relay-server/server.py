@@ -54,9 +54,11 @@ BASE_FEE_LCAI            = float(os.environ.get("RELAY_FEE_LCAI", "2.0"))
 LOW_BALANCE_THRESHOLD    = float(os.environ.get("LOW_BALANCE_THRESHOLD", "10.0"))
 PAID_WALLETS_FILE        = os.environ.get("PAID_WALLETS_FILE", "/data/paid_wallets.json")
 LIGHTTUBE_HIDDEN_FILE    = os.environ.get("LIGHTTUBE_HIDDEN_FILE", "/data/lighttube_hidden.json")
+ORCAVAULT_HIDDEN_FILE    = os.environ.get("ORCAVAULT_HIDDEN_FILE", "/data/orcavault_hidden.json")
 LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
-# Comma-separated video IDs that are ALWAYS hidden (survives redeploys without a volume)
+# Comma-separated IDs that are ALWAYS hidden (survive redeploys without a volume)
 LIGHTTUBE_HIDDEN_SEED    = {s.strip() for s in os.environ.get("LIGHTTUBE_HIDDEN_IDS", "").split(",") if s.strip()}
+ORCAVAULT_HIDDEN_SEED    = {s.strip() for s in os.environ.get("ORCAVAULT_HIDDEN_IDS", "").split(",") if s.strip()}
 LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
 CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
 CHAIN_ID                 = 9200
@@ -318,6 +320,25 @@ def save_hidden_videos(hidden):
             json.dump(list(hidden), f)
     except Exception as e:
         print(f"Warning: could not save hidden_videos: {e}")
+
+def load_orcavault_hidden():
+    """Load hidden OrcaVault memory IDs from disk, merged with always-hidden seed."""
+    try:
+        os.makedirs(os.path.dirname(ORCAVAULT_HIDDEN_FILE), exist_ok=True)
+        with open(ORCAVAULT_HIDDEN_FILE, 'r') as f:
+            from_disk = set(str(x) for x in json.load(f))
+    except Exception:
+        from_disk = set()
+    return from_disk | ORCAVAULT_HIDDEN_SEED
+
+def save_orcavault_hidden(hidden):
+    """Persist hidden OrcaVault memory IDs to disk."""
+    try:
+        os.makedirs(os.path.dirname(ORCAVAULT_HIDDEN_FILE), exist_ok=True)
+        with open(ORCAVAULT_HIDDEN_FILE, 'w') as f:
+            json.dump(list(hidden), f)
+    except Exception as e:
+        print(f"Warning: could not save orcavault_hidden: {e}")
 
 def has_relay_access(wallet_address: str) -> bool:
     """True if wallet is owner (free) or has paid."""
@@ -613,6 +634,54 @@ def lighttube_unhide():
     hidden = load_hidden_videos()
     hidden.discard(str(video_id))
     save_hidden_videos(hidden)
+    return jsonify({'success': True, 'hidden_count': len(hidden)})
+
+# ─── OrcaVault hidden memory registry ────────────────────────────────────────
+
+@app.route('/api/orcavault/hidden', methods=['GET'])
+def orcavault_get_hidden():
+    """Public endpoint — returns list of hidden OrcaVault memory IDs."""
+    hidden = load_orcavault_hidden()
+    return jsonify({'hidden': list(hidden)})
+
+@app.route('/api/orcavault/hide', methods=['POST'])
+def orcavault_hide():
+    """Admin endpoint — hide a memory from OrcaVault.
+    Body: { memoryId: "N", adminKey: "secret" }"""
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    memory_id = body.get('memoryId')
+    admin_key = body.get('adminKey', '')
+    if admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if memory_id is None:
+        return jsonify({'error': 'memoryId required'}), 400
+    hidden = load_orcavault_hidden()
+    hidden.add(str(memory_id))
+    save_orcavault_hidden(hidden)
+    return jsonify({'success': True, 'hidden_count': len(hidden)})
+
+@app.route('/api/orcavault/unhide', methods=['POST'])
+def orcavault_unhide():
+    """Admin endpoint — restore a hidden memory to OrcaVault.
+    Body: { memoryId: "N", adminKey: "secret" }"""
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    memory_id = body.get('memoryId')
+    admin_key = body.get('adminKey', '')
+    if admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if memory_id is None:
+        return jsonify({'error': 'memoryId required'}), 400
+    hidden = load_orcavault_hidden()
+    hidden.discard(str(memory_id))
+    save_orcavault_hidden(hidden)
     return jsonify({'success': True, 'hidden_count': len(hidden)})
 
 if __name__ == '__main__':
