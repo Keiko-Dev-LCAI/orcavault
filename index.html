@@ -1857,7 +1857,7 @@ async function processFile(file) {
   } else {
     const kb = Math.round(file.size / 1024);
     const MAX_VIDEO_BYTES = 78 * 1024;   // 78KB
-    const MAX_OTHER_BYTES = 1024 * 1024;  // 1MB
+    const MAX_OTHER_BYTES = 2 * 1024 * 1024;  // 2MB
     const isVideo = currentMemType === 'video';
     const isAudio = currentMemType === 'audio';
 
@@ -1952,7 +1952,7 @@ function acceptTerms() {
 
 /** Returns chunk-estimate info for a given byte size */
 function estimateUpload(byteSize) {
-  const CHUNK_SIZE = 1024 * 1024; // 1MB chunks — Lightchain 60M gas limit supports this
+  const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks — ~32M gas, well within 60M limit
   const chunks = Math.ceil(byteSize / CHUNK_SIZE);
   const totalTx = 1 + chunks; // 1 initMemory + N addChunk
   const totalSecs = totalTx * 3;
@@ -1965,7 +1965,7 @@ function estimateUpload(byteSize) {
 }
 
 /** Split a base64 string into ≤1MB chunks */
-function chunkBase64(dataURI, chunkSize = 1024 * 1024) {
+function chunkBase64(dataURI, chunkSize = 2 * 1024 * 1024) {
   const chunks = [];
   for (let i = 0; i < dataURI.length; i += chunkSize) {
     chunks.push(dataURI.slice(i, i + chunkSize));
@@ -2014,7 +2014,7 @@ async function storeMemory() {
   btn.disabled = true;
 
   // Route: chunked (V2) or single (V1/V2)
-  if (dataURI.length > 1024 * 1024 && V2_CONTRACT_ADDRESS && contractV2) {
+  if (dataURI.length > 2 * 1024 * 1024 && V2_CONTRACT_ADDRESS && contractV2) {
     const { chunks, totalTx, estimatedMinutes, estimatedSeconds } = estimateUpload(dataURI.length);
     const fileMB = (dataURI.length / 1024 / 1024).toFixed(2);
     const timeStr = estimatedMinutes > 0
