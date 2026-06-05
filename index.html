@@ -1814,6 +1814,8 @@ function goAddMemory() {
   // Set today as default date
   document.getElementById('mem-date').value = new Date().toISOString().split('T')[0];
   showScreen('add-memory');
+  // Refresh relay access status each time the form opens
+  if (RELAY_URL && wallet) { checkRelayAccess(wallet); }
 }
 function goViewVaultCurrent() {
   if (currentVaultId) loadAndShowVault(currentVaultId);
