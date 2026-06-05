@@ -35,7 +35,7 @@ Optional:
 """
 
 import os, json, time, uuid, base64, threading
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from web3 import Web3
 from eth_account import Account
@@ -60,6 +60,8 @@ LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
 LIGHTTUBE_HIDDEN_SEED    = {s.strip() for s in os.environ.get("LIGHTTUBE_HIDDEN_IDS", "").split(",") if s.strip()}
 ORCAVAULT_HIDDEN_SEED    = {s.strip() for s in os.environ.get("ORCAVAULT_HIDDEN_IDS", "").split(",") if s.strip()}
 LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
+LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
+LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
 CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
 CHAIN_ID                 = 9200
 
@@ -182,17 +184,18 @@ def save_paid_wallets(wallets):
 
 # ─── LightTube relay upload ───────────────────────────────────────────────────
 
-def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri):
-    """Background thread: chunk and store a video via LightTubeV2 relay functions."""
+def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, thumbnail_b64=None):
+    """Background thread: chunk and store a video via LightTube relay functions (V3 preferred, V2 fallback)."""
     job = lt_upload_jobs[job_id]
     try:
-        if not LIGHTTUBE_V2_ADDRESS:
-            raise Exception("LIGHTTUBE_V2_ADDRESS not configured")
+        active_address = LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS
+        if not active_address:
+            raise Exception("No LightTube contract address configured (set LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS)")
         w3 = Web3(Web3.HTTPProvider(RPC_URL))
         relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
         contract   = w3.eth.contract(
-            address=Web3.to_checksum_address(LIGHTTUBE_V2_ADDRESS),
-            abi=LIGHTTUBE_V2_ABI
+            address=Web3.to_checksum_address(active_address),
+            abi=LIGHTTUBE_V2_ABI  # relay ABI identical for V2 and V3
         )
         chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
         job['total'] = len(chunks)
@@ -215,7 +218,7 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri):
 
         # Parse videoId from VideoCreated event
         ct_with_events = w3.eth.contract(
-            address=Web3.to_checksum_address(LIGHTTUBE_V2_ADDRESS),
+            address=Web3.to_checksum_address(active_address),
             abi=LIGHTTUBE_V2_ABI
         )
         logs    = ct_with_events.events.VideoCreated().process_receipt(receipt)
@@ -223,6 +226,18 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri):
         job['videoId'] = video_id
         job['status']  = 'uploading'
         nonce += 1
+
+        # Save thumbnail immediately after we know the videoId (non-fatal if it fails)
+        if thumbnail_b64:
+            try:
+                os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
+                prefix = "v3" if LIGHTTUBE_V3_ADDRESS else "v2"
+                thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, f"{prefix}_{video_id}.jpg")
+                thumb_data = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
+                with open(thumb_path, 'wb') as tf:
+                    tf.write(base64.b64decode(thumb_data))
+            except Exception as te:
+                print(f"Thumbnail save failed (non-fatal): {te}")
 
         # ── addVideoChunkFor × N ──────────────────────────────────────
         for i, chunk in enumerate(chunks):
@@ -260,6 +275,7 @@ def lighttube_upload():
     category   = request.form.get('category', 'Other').strip()
     timestamp  = request.form.get('timestamp', '').strip()
     video_file = request.files.get('video')
+    thumbnail  = request.form.get('thumbnail', '').strip() or None
 
     if not wallet or not signature or not title or not video_file:
         return jsonify({'error': 'Missing required fields'}), 400
@@ -285,7 +301,7 @@ def lighttube_upload():
         'status': 'pending', 'progress': 0, 'total': 0, 'videoId': None, 'error': None
     }
     t = threading.Thread(target=_do_lt_upload,
-                         args=(job_id, wallet, title, description, category, data_uri),
+                         args=(job_id, wallet, title, description, category, data_uri, thumbnail),
                          daemon=True)
     t.start()
     return jsonify({'jobId': job_id})
@@ -298,6 +314,79 @@ def lighttube_upload_progress(job_id):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     return jsonify(job)
+
+
+# ─── LightTube thumbnail endpoints ───────────────────────────────────────────
+
+@app.route('/api/lighttube/thumb/<version>/<video_id>', methods=['GET'])
+def lighttube_get_thumb(version, video_id):
+    """Serve stored thumbnail for a LightTube video. version = v2 or v3."""
+    if version not in ('v2', 'v3'):
+        return '', 400
+    thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, f"{version}_{video_id}.jpg")
+    if not os.path.exists(thumb_path):
+        return '', 404
+    return send_file(thumb_path, mimetype='image/jpeg')
+
+
+@app.route('/api/lighttube/set-thumbnail', methods=['POST'])
+def lighttube_set_thumbnail():
+    """
+    Allow a video uploader to set/update their video thumbnail.
+    Body JSON: {videoId, contractVersion, wallet, signature, timestamp, thumbnail}
+    thumbnail = base64 data URI (image/jpeg recommended, max ~200KB)
+    """
+    data           = request.get_json(force=True) or {}
+    video_id       = str(data.get('videoId', '')).strip()
+    contract_ver   = str(data.get('contractVersion', 'v3')).strip().lower()
+    wallet         = (data.get('wallet', '') or '').strip().lower()
+    signature      = (data.get('signature', '') or '').strip()
+    timestamp      = (data.get('timestamp', '') or '').strip()
+    thumbnail      = (data.get('thumbnail', '') or '').strip()
+
+    if not all([video_id, wallet, signature, thumbnail]):
+        return jsonify({'error': 'Missing required fields'}), 400
+    if contract_ver not in ('v2', 'v3'):
+        return jsonify({'error': 'contractVersion must be v2 or v3'}), 400
+
+    # Verify wallet signature
+    message = f"Set thumbnail for LightTube video {video_id}\nWallet: {wallet}\nTimestamp: {timestamp}"
+    try:
+        msg       = encode_defunct(text=message)
+        recovered = Account.recover_message(msg, signature=signature).lower()
+        if recovered != wallet:
+            return jsonify({'error': 'Signature does not match wallet'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature error: {e}'}), 401
+
+    # Verify ownership on-chain
+    VIDEOS_ABI = [{"inputs":[{"name":"","type":"uint256"}],"name":"videos","outputs":[
+        {"name":"uploader","type":"address"},{"name":"totalChunks","type":"uint256"},{"name":"exists","type":"bool"}
+    ],"stateMutability":"view","type":"function"}]
+    try:
+        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+        addr = LIGHTTUBE_V3_ADDRESS if contract_ver == 'v3' else LIGHTTUBE_V2_ADDRESS
+        if not addr:
+            return jsonify({'error': f'Contract {contract_ver} not configured'}), 400
+        ct   = w3_local.eth.contract(address=Web3.to_checksum_address(addr), abi=VIDEOS_ABI)
+        vid  = ct.functions.videos(int(video_id)).call()
+        if not vid[2]:
+            return jsonify({'error': 'Video not found on chain'}), 404
+        if vid[0].lower() != wallet:
+            return jsonify({'error': 'Not the video uploader'}), 403
+    except Exception as e:
+        return jsonify({'error': f'Chain verification failed: {e}'}), 500
+
+    # Save thumbnail
+    try:
+        os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
+        thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, f"{contract_ver}_{video_id}.jpg")
+        thumb_data = thumbnail.split(',', 1)[1] if ',' in thumbnail else thumbnail
+        with open(thumb_path, 'wb') as f:
+            f.write(base64.b64decode(thumb_data))
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': f'Save failed: {e}'}), 500
 
 
 # ─── LightTube hidden video registry ─────────────────────────────────────────
