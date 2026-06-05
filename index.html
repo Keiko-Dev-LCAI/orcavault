@@ -1555,14 +1555,19 @@ function renderMemoriesGrid() {
       thumbHtml = `<div class="memory-thumb-placeholder">${icon}</div>`;
     }
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
-    // For chunked memories not yet assembled, show spinner thumb
+    // For chunked memories, use cache if available, otherwise show type icon placeholder
     let cardThumb = thumbHtml;
-    if (m._isChunked && !chunkCache.has(m._memoryId)) {
-      cardThumb = `<div class="memory-thumb-placeholder"><div class="chunk-spinner"></div></div>`;
-    } else if (m._isChunked && chunkCache.has(m._memoryId)) {
-      const cd = chunkCache.get(m._memoryId);
-      if (m.memType === 'photo' && cd && cd.startsWith('data:image')) {
-        cardThumb = `<img class="memory-thumb" src="${cd}" alt="${escHtml(m.title)}" loading="lazy">`;
+    if (m._isChunked) {
+      if (chunkCache.has(m._memoryId)) {
+        const cd = chunkCache.get(m._memoryId);
+        if (m.memType === 'photo' && cd && cd.startsWith('data:image')) {
+          cardThumb = `<img class="memory-thumb" src="${cd}" alt="${escHtml(m.title)}" loading="lazy">`;
+        } else {
+          cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
+        }
+      } else {
+        // Not in cache — just show the type icon, content loads when user clicks
+        cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
       }
     }
     const chainRow = m.txHash ? `<div class="chain-link-row">
