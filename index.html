@@ -1025,7 +1025,7 @@ footer a{color:var(--gold);text-decoration:none}
       <button id="vtb-copy-btn" onclick="copyVideoCommand()" style="position:absolute;top:12px;right:12px;background:var(--gold);color:#0d0b18;border:none;border-radius:8px;padding:9px 16px;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">📋 Copy</button>
     </div>
     <div style="font-size:18px;color:var(--muted);margin-top:18px;line-height:1.6;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px">
-      💡 <strong style="color:var(--text)">What this does:</strong> makes a silent 5-second clip at 240p — tiny enough for the blockchain. After running it, upload the new <strong style="color:var(--green)">output_small.mp4</strong> file here.<br><br>
+      💡 <strong style="color:var(--text)">What this does:</strong> compresses a large video into a smaller file for faster upload. After running it, upload the new <strong style="color:var(--green)">output_small.mp4</strong> file here.<br><br>
       <span style="color:var(--muted);font-size:16px">Don't have ffmpeg? Download it free at <strong style="color:var(--text)">ffmpeg.org</strong></span>
     </div>
     <div style="margin-top:24px">
@@ -1793,7 +1793,7 @@ function selectMemType(btn, type) {
     } else if (type === 'video') {
       uploadLabel.textContent = 'Upload Video';
       uzIcon.textContent = '🎬'; uzText.textContent = 'Click or drag & drop a video';
-      uzSub.textContent = '⚠️ Max 78KB — use a short clip (5–10 sec) at 240p resolution · MP4, MOV, WEBM';
+      uzSub.textContent = 'Any size supported · MP4, MOV, WEBM · large files upload in chunks automatically';
       fileInput.accept = 'video/*';
     } else if (type === 'audio') {
       uploadLabel.textContent = 'Upload Audio';
@@ -1803,7 +1803,7 @@ function selectMemType(btn, type) {
     } else if (type === 'document') {
       uploadLabel.textContent = 'Upload Document';
       uzIcon.textContent = '📄'; uzText.textContent = 'Click or drag & drop a document';
-      uzSub.textContent = '⚠️ Max 90KB · PDF, DOC, TXT';
+      uzSub.textContent = 'Any size supported · PDF, DOC, TXT · large files upload in chunks automatically';
       fileInput.accept = '.pdf,.doc,.docx,.txt,.xlsx,.csv';
     }
   }
