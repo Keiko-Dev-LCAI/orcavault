@@ -54,6 +54,7 @@ BASE_FEE_LCAI            = float(os.environ.get("RELAY_FEE_LCAI", "2.0"))
 LOW_BALANCE_THRESHOLD    = float(os.environ.get("LOW_BALANCE_THRESHOLD", "10.0"))
 PAID_WALLETS_FILE        = os.environ.get("PAID_WALLETS_FILE", "/data/paid_wallets.json")
 LIGHTTUBE_HIDDEN_FILE    = os.environ.get("LIGHTTUBE_HIDDEN_FILE", "/data/lighttube_hidden.json")
+LIGHTTUBE_OVERRIDES_FILE = os.environ.get("LIGHTTUBE_OVERRIDES_FILE", "/data/lighttube_overrides.json")
 ORCAVAULT_HIDDEN_FILE    = os.environ.get("ORCAVAULT_HIDDEN_FILE", "/data/orcavault_hidden.json")
 LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
 # Comma-separated IDs that are ALWAYS hidden (survive redeploys without a volume)
@@ -525,6 +526,22 @@ def save_hidden_videos(hidden):
     except Exception as e:
         print(f"Warning: could not save hidden_videos: {e}")
 
+def load_lt_overrides():
+    """Load LightTube metadata overrides: {videoId: {title, description, category, ...}}"""
+    try:
+        with open(LIGHTTUBE_OVERRIDES_FILE, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_lt_overrides(overrides):
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUBE_OVERRIDES_FILE), exist_ok=True)
+        with open(LIGHTTUBE_OVERRIDES_FILE, 'w') as f:
+            json.dump(overrides, f, indent=2)
+    except Exception as e:
+        print(f"Warning: could not save lt_overrides: {e}")
+
 def load_orcavault_hidden():
     """Load hidden OrcaVault memory IDs from disk, merged with always-hidden seed."""
     try:
@@ -882,6 +899,34 @@ def lighttube_update_metadata():
         return jsonify({'success': True, 'txHash': tx_hash.hex(), 'status': receipt.status})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/lighttube/overrides', methods=['GET'])
+def lighttube_get_overrides():
+    """Public — returns metadata overrides so frontend can apply them over on-chain data."""
+    return jsonify(load_lt_overrides())
+
+@app.route('/api/lighttube/set-override', methods=['POST'])
+def lighttube_set_override():
+    """Admin — set a metadata override for a video. Merges with existing on-chain data client-side.
+    Body: { videoId: "v3-4", title: "...", description: "...", category: "...", adminKey: "..." }
+    Any field can be omitted — only provided fields are overridden.
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured'}), 500
+    body = request.get_json()
+    if not body or body.get('adminKey', '') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    vid = str(body.get('videoId', ''))
+    if not vid:
+        return jsonify({'error': 'videoId required'}), 400
+    overrides = load_lt_overrides()
+    entry = overrides.get(vid, {})
+    for field in ('title', 'description', 'category'):
+        if field in body:
+            entry[field] = body[field]
+    overrides[vid] = entry
+    save_lt_overrides(overrides)
+    return jsonify({'success': True, 'videoId': vid, 'override': entry})
 
 # ─── OrcaVault hidden memory registry ────────────────────────────────────────
 
