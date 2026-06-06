@@ -59,6 +59,10 @@ ORCAVAULT_HIDDEN_FILE    = os.environ.get("ORCAVAULT_HIDDEN_FILE", "/data/orcava
 LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
 # Comma-separated IDs that are ALWAYS hidden (survive redeploys without a volume)
 LIGHTTUBE_HIDDEN_SEED    = {s.strip() for s in os.environ.get("LIGHTTUBE_HIDDEN_IDS", "").split(",") if s.strip()}
+# Maintenance mode — set LIGHTTUBE_MAINTENANCE=true in Railway to block all uploads
+LIGHTTUBE_MAINTENANCE    = os.environ.get("LIGHTTUBE_MAINTENANCE", "").lower() in ("true", "1", "yes")
+# Permanently banned wallets — comma-separated, set BANNED_WALLETS in Railway
+BANNED_WALLETS           = {w.strip().lower() for w in os.environ.get("BANNED_WALLETS", "").split(",") if w.strip()}
 ORCAVAULT_HIDDEN_SEED    = {s.strip() for s in os.environ.get("ORCAVAULT_HIDDEN_IDS", "").split(",") if s.strip()}
 LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
 LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
@@ -380,6 +384,10 @@ def lighttube_upload():
     Form fields: wallet, signature, title, description, category, timestamp
     File field:  video  (multipart/form-data)
     """
+    # Maintenance mode — block all uploads
+    if LIGHTTUBE_MAINTENANCE:
+        return jsonify({'error': 'LightTube is temporarily offline for maintenance. Please check back soon.'}), 503
+
     wallet     = request.form.get('wallet', '').strip().lower()
     signature  = request.form.get('signature', '').strip()
     title      = request.form.get('title', '').strip()
@@ -391,6 +399,10 @@ def lighttube_upload():
 
     if not wallet or not signature or not title or not video_file:
         return jsonify({'error': 'Missing required fields'}), 400
+
+    # Permanent wallet ban check
+    if wallet in BANNED_WALLETS:
+        return jsonify({'error': 'This wallet has been banned from LightTube.'}), 403
 
     # Verify wallet signature
     message = f"Upload to LightTube\nTitle: {title}\nWallet: {wallet}\nTimestamp: {timestamp}"
