@@ -34,7 +34,7 @@ Optional:
   PAID_WALLETS_FILE        = path to persistent JSON file (default: /data/paid_wallets.json)
 """
 
-import os, json, time, uuid, base64, threading
+import os, json, time, uuid, base64, threading, urllib.request
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from web3 import Web3
@@ -62,6 +62,9 @@ ORCAVAULT_HIDDEN_SEED    = {s.strip() for s in os.environ.get("ORCAVAULT_HIDDEN_
 LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
 LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
+GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_THUMB_REPO        = "Keiko-Dev-LCAI/lighttube"
+GITHUB_THUMB_BRANCH      = "main"
 CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
 CHAIN_ID                 = 9200
 
@@ -182,6 +185,38 @@ def save_paid_wallets(wallets):
     except Exception as e:
         print(f"Warning: could not save paid_wallets: {e}")
 
+# ─── GitHub thumbnail storage ────────────────────────────────────────────────
+
+def save_thumbnail_github(filename, data_b64):
+    """Commit a thumbnail JPEG to the lighttube GitHub repo. Returns the raw URL."""
+    if not GITHUB_TOKEN:
+        raise Exception("GITHUB_TOKEN not configured")
+    # Strip data URI prefix
+    if ',' in data_b64:
+        data_b64 = data_b64.split(',', 1)[1]
+    path    = f"thumbs/{filename}"
+    api_url = f"https://api.github.com/repos/{GITHUB_THUMB_REPO}/contents/{path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+    }
+    # Get existing SHA (needed for update)
+    sha = None
+    try:
+        req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            sha = json.loads(r.read()).get("sha")
+    except Exception:
+        pass
+    body = {"message": f"Thumbnail {filename}", "content": data_b64, "branch": GITHUB_THUMB_BRANCH}
+    if sha:
+        body["sha"] = sha
+    req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        result = json.loads(r.read())
+        return f"https://raw.githubusercontent.com/{GITHUB_THUMB_REPO}/{GITHUB_THUMB_BRANCH}/thumbs/{filename}"
+
 # ─── LightTube relay upload ───────────────────────────────────────────────────
 
 def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, thumbnail_b64=None):
@@ -230,12 +265,16 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, t
         # Save thumbnail immediately after we know the videoId (non-fatal if it fails)
         if thumbnail_b64:
             try:
-                os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
                 prefix = "v3" if LIGHTTUBE_V3_ADDRESS else "v2"
-                thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, f"{prefix}_{video_id}.jpg")
-                thumb_data = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
-                with open(thumb_path, 'wb') as tf:
-                    tf.write(base64.b64decode(thumb_data))
+                filename = f"{prefix}_{video_id}.jpg"
+                if GITHUB_TOKEN:
+                    save_thumbnail_github(filename, thumbnail_b64)
+                else:
+                    os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
+                    thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, filename)
+                    thumb_data = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
+                    with open(thumb_path, 'wb') as tf:
+                        tf.write(base64.b64decode(thumb_data))
             except Exception as te:
                 print(f"Thumbnail save failed (non-fatal): {te}")
 
@@ -377,13 +416,17 @@ def lighttube_set_thumbnail():
     except Exception as e:
         return jsonify({'error': f'Chain verification failed: {e}'}), 500
 
-    # Save thumbnail
+    # Save thumbnail (GitHub preferred, disk fallback)
     try:
-        os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
-        thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, f"{contract_ver}_{video_id}.jpg")
-        thumb_data = thumbnail.split(',', 1)[1] if ',' in thumbnail else thumbnail
-        with open(thumb_path, 'wb') as f:
-            f.write(base64.b64decode(thumb_data))
+        filename = f"{contract_ver}_{video_id}.jpg"
+        if GITHUB_TOKEN:
+            save_thumbnail_github(filename, thumbnail)
+        else:
+            os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
+            thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, filename)
+            thumb_data = thumbnail.split(',', 1)[1] if ',' in thumbnail else thumbnail
+            with open(thumb_path, 'wb') as f:
+                f.write(base64.b64decode(thumb_data))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': f'Save failed: {e}'}), 500
