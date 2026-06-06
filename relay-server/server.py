@@ -214,6 +214,95 @@ def save_paid_wallets(wallets):
 
 # ─── GitHub thumbnail storage ────────────────────────────────────────────────
 
+def _github_read_json(path):
+    """Read a JSON file from the lighttube GitHub repo. Returns parsed data or None on error."""
+    if not GITHUB_TOKEN:
+        return None
+    api_url = f"https://api.github.com/repos/{GITHUB_THUMB_REPO}/contents/{path}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    try:
+        req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            content = base64.b64decode(data["content"].replace("\n", "")).decode()
+            return json.loads(content)
+    except Exception:
+        return None
+
+def _github_write_json(path, data, message):
+    """Write a JSON file to the lighttube GitHub repo. Creates or updates."""
+    if not GITHUB_TOKEN:
+        return False
+    api_url = f"https://api.github.com/repos/{GITHUB_THUMB_REPO}/contents/{path}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"}
+    sha = None
+    try:
+        req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            sha = json.loads(r.read()).get("sha")
+    except Exception:
+        pass
+    content_b64 = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
+    body = {"message": message, "content": content_b64, "branch": GITHUB_THUMB_BRANCH}
+    if sha:
+        body["sha"] = sha
+    try:
+        req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            r.read()
+        return True
+    except Exception as e:
+        print(f"Warning: could not write {path} to GitHub: {e}")
+        return False
+
+# ─── GitHub-backed moderation lists (survive all redeploys) ──────────────────
+
+_perm_hidden_cache    = None   # set of permanently hidden video IDs
+_banned_wallets_cache = None   # set of permanently banned wallet addresses
+
+def get_permanent_hidden():
+    """Return the GitHub-backed permanent hidden set. Loaded once per process startup."""
+    global _perm_hidden_cache
+    if _perm_hidden_cache is None:
+        from_github = _github_read_json("moderation/permanent_hidden.json") or []
+        _perm_hidden_cache = set(str(x) for x in from_github) | LIGHTTUBE_HIDDEN_SEED
+    return _perm_hidden_cache
+
+def add_permanent_hidden(video_id):
+    """Mark a video as permanently hidden. Updates GitHub in background."""
+    perm = get_permanent_hidden()
+    perm.add(str(video_id))
+    # Immediately add to temp hidden file too for fast effect
+    hidden = load_hidden_videos()
+    hidden.add(str(video_id))
+    save_hidden_videos(hidden)
+    # Persist to GitHub in background
+    snapshot = list(perm)
+    threading.Thread(
+        target=_github_write_json,
+        args=("moderation/permanent_hidden.json", snapshot, f"Permanently hide {video_id}"),
+        daemon=True
+    ).start()
+
+def get_banned_wallets_gh():
+    """Return the GitHub-backed banned wallet set. Loaded once per process startup."""
+    global _banned_wallets_cache
+    if _banned_wallets_cache is None:
+        from_github = _github_read_json("moderation/banned_wallets.json") or []
+        _banned_wallets_cache = set(w.lower() for w in from_github) | BANNED_WALLETS
+    return _banned_wallets_cache
+
+def add_banned_wallet_gh(wallet):
+    """Permanently ban a wallet. Updates GitHub in background."""
+    banned = get_banned_wallets_gh()
+    banned.add(wallet.lower())
+    snapshot = list(banned)
+    threading.Thread(
+        target=_github_write_json,
+        args=("moderation/banned_wallets.json", snapshot, f"Ban wallet {wallet[:10]}"),
+        daemon=True
+    ).start()
+
 def save_thumbnail_github(filename, data_b64):
     """Commit a thumbnail JPEG to the lighttube GitHub repo. Returns the raw URL."""
     if not GITHUB_TOKEN:
@@ -400,8 +489,8 @@ def lighttube_upload():
     if not wallet or not signature or not title or not video_file:
         return jsonify({'error': 'Missing required fields'}), 400
 
-    # Permanent wallet ban check
-    if wallet in BANNED_WALLETS:
+    # Permanent wallet ban check — env var + GitHub-backed list
+    if wallet in BANNED_WALLETS or wallet in get_banned_wallets_gh():
         return jsonify({'error': 'This wallet has been banned from LightTube.'}), 403
 
     # Verify wallet signature
@@ -520,14 +609,18 @@ def lighttube_set_thumbnail():
 # ─── LightTube hidden video registry ─────────────────────────────────────────
 
 def load_hidden_videos():
-    """Load hidden video IDs from disk, merged with the always-hidden seed from env var."""
+    """Load hidden video IDs — merged from three sources:
+    1. Disk file  (fast, resets on redeploy if volume is lost)
+    2. Env var seed (survives redeploys, set manually in Railway)
+    3. GitHub permanent list (survives everything, set by admin moderation actions)
+    """
     try:
         os.makedirs(os.path.dirname(LIGHTTUBE_HIDDEN_FILE), exist_ok=True)
         with open(LIGHTTUBE_HIDDEN_FILE, 'r') as f:
             from_disk = set(str(x) for x in json.load(f))
     except Exception:
         from_disk = set()
-    return from_disk | LIGHTTUBE_HIDDEN_SEED  # always include seeded IDs
+    return from_disk | LIGHTTUBE_HIDDEN_SEED | get_permanent_hidden()
 
 def save_hidden_videos(hidden):
     """Persist hidden video IDs to disk."""
@@ -868,6 +961,67 @@ def lighttube_unhide():
     hidden.discard(str(video_id))
     save_hidden_videos(hidden)
     return jsonify({'success': True, 'hidden_count': len(hidden)})
+
+@app.route('/api/lighttube/permanent-remove', methods=['POST'])
+def lighttube_permanent_remove():
+    """
+    Admin — permanently remove a video. Writes to GitHub so it survives all future redeploys.
+    Cannot be restored via the UI (use Railway env var LIGHTTUBE_HIDDEN_IDS to manually override).
+    Body: { videoId: "v3-2", adminKey: "secret" }
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    if body.get('adminKey') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    video_id = body.get('videoId')
+    if not video_id:
+        return jsonify({'error': 'videoId required'}), 400
+    add_permanent_hidden(str(video_id))
+    print(f"[MODERATION] Permanently removed video {video_id}")
+    return jsonify({'success': True, 'message': f'Video {video_id} permanently removed and written to GitHub'})
+
+@app.route('/api/lighttube/ban-wallet', methods=['POST'])
+def lighttube_ban_wallet():
+    """
+    Admin — permanently ban a wallet from uploading + optionally permanently remove their video.
+    Ban list written to GitHub — survives all future redeploys.
+    Body: { wallet: "0x...", videoId: "v3-2" (optional), adminKey: "secret" }
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    if body.get('adminKey') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    wallet   = body.get('wallet', '').strip().lower()
+    video_id = body.get('videoId')
+    if not wallet:
+        return jsonify({'error': 'wallet required'}), 400
+    add_banned_wallet_gh(wallet)
+    if video_id:
+        add_permanent_hidden(str(video_id))
+    print(f"[MODERATION] Banned wallet {wallet[:10]}... video={video_id or 'none'}")
+    return jsonify({
+        'success': True,
+        'message': f'Wallet banned forever. Video {"permanently removed" if video_id else "not changed"}.'
+    })
+
+@app.route('/api/lighttube/moderation-lists', methods=['GET'])
+def lighttube_moderation_lists():
+    """
+    Admin — return permanent hidden IDs and banned wallets. Admin key required.
+    """
+    admin_key = request.args.get('adminKey', '')
+    if not LIGHTTUBE_ADMIN_KEY or admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({
+        'permanent_hidden': list(get_permanent_hidden()),
+        'banned_wallets':   list(get_banned_wallets_gh()),
+    })
 
 @app.route('/api/lighttube/update-metadata', methods=['POST'])
 def lighttube_update_metadata():
