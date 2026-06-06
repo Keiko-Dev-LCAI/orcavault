@@ -34,7 +34,7 @@ Optional:
   PAID_WALLETS_FILE        = path to persistent JSON file (default: /data/paid_wallets.json)
 """
 
-import os, json, time, uuid, base64, threading, urllib.request, concurrent.futures
+import os, json, time, uuid, base64, threading, urllib.request, concurrent.futures, queue
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from web3 import Web3
@@ -141,6 +141,23 @@ V3_ABI = [
 
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 
+# ─── Web3 connection pool ─────────────────────────────────────────────────────
+# 10 reusable connections shared across upload threads. Much cheaper than
+# spawning a fresh HTTPS session per chunk transaction. Queue is thread-safe
+# by design — no race conditions.
+_W3_POOL_SIZE = 10
+_w3_pool: queue.Queue = queue.Queue()
+for _i in range(_W3_POOL_SIZE):
+    _w3_pool.put(Web3(Web3.HTTPProvider(RPC_URL)))
+
+def _borrow_w3() -> Web3:
+    """Get a Web3 connection from the pool. Blocks up to 60 s if all are busy."""
+    return _w3_pool.get(timeout=60)
+
+def _return_w3(conn: Web3) -> None:
+    """Return a connection to the pool."""
+    _w3_pool.put(conn)
+
 def get_relay_account():
     return Account.from_key(RELAY_PRIVATE_KEY)
 
@@ -221,20 +238,23 @@ def save_thumbnail_github(filename, data_b64):
 # ─── LightTube relay upload ───────────────────────────────────────────────────
 
 def _send_one_chunk_tx(video_id, chunk_index, chunk_data, nonce, gas_price, contract_address):
-    """Send a single addVideoChunkFor transaction. Thread-safe — creates its own web3 connection."""
-    w3t        = Web3(Web3.HTTPProvider(RPC_URL))
-    ct         = w3t.eth.contract(address=Web3.to_checksum_address(contract_address), abi=LIGHTTUBE_V2_ABI)
-    relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
-    tx = ct.functions.addVideoChunkFor(video_id, chunk_index, chunk_data).build_transaction({
-        'from':     relay_acct.address,
-        'nonce':    nonce,
-        'gas':      40_000_000,
-        'gasPrice': gas_price,
-        'chainId':  CHAIN_ID,
-    })
-    signed  = relay_acct.sign_transaction(tx)
-    tx_hash = w3t.eth.send_raw_transaction(signed.raw_transaction)
-    return w3t.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+    """Send a single addVideoChunkFor transaction. Borrows a pooled Web3 connection."""
+    w3t = _borrow_w3()
+    try:
+        ct         = w3t.eth.contract(address=Web3.to_checksum_address(contract_address), abi=LIGHTTUBE_V2_ABI)
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        tx = ct.functions.addVideoChunkFor(video_id, chunk_index, chunk_data).build_transaction({
+            'from':     relay_acct.address,
+            'nonce':    nonce,
+            'gas':      12_000_000,
+            'gasPrice': gas_price,
+            'chainId':  CHAIN_ID,
+        })
+        signed  = relay_acct.sign_transaction(tx)
+        tx_hash = w3t.eth.send_raw_transaction(signed.raw_transaction)
+        return w3t.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+    finally:
+        _return_w3(w3t)
 
 
 def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, thumbnail_b64=None):
@@ -296,16 +316,21 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, t
             except Exception as te:
                 print(f"Thumbnail save failed (non-fatal): {te}")
 
-        # ── addVideoChunkFor × N (parallel batches of CHUNK_BATCH_SIZE) ────────
-        with concurrent.futures.ThreadPoolExecutor(max_workers=CHUNK_BATCH_SIZE) as pool:
-            for batch_start in range(0, len(chunks), CHUNK_BATCH_SIZE):
-                batch      = chunks[batch_start : batch_start + CHUNK_BATCH_SIZE]
-                gas_price  = w3.eth.gas_price
-                future_map = {}
+        # ── addVideoChunkFor × N (adaptive parallel batches) ──────────────────
+        _MAX_BATCH = 25   # never go above this
+        _MIN_BATCH = 8    # never go below this
+        batch_size = max(CHUNK_BATCH_SIZE, 15)  # start at 15 (or env var if higher)
+        chunk_idx  = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
+            while chunk_idx < len(chunks):
+                batch          = chunks[chunk_idx : chunk_idx + batch_size]
+                gas_price      = int(w3.eth.gas_price * 1.2)  # 20% bump avoids underpricing
+                future_map     = {}
+                had_real_error = False
 
                 # Fire all chunks in this batch simultaneously with pre-assigned nonces
                 for j, chunk in enumerate(batch):
-                    ci = batch_start + j
+                    ci = chunk_idx + j
                     cn = nonce + j
                     f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunk, cn, gas_price, active_address)
                     future_map[f] = (ci, cn, chunk)
@@ -320,11 +345,21 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, t
                         if 'nonce too low' in err_str or 'already known' in err_str:
                             pass  # tx was already mined — treat as success
                         else:
+                            had_real_error = True
                             # One retry with a fresh gas price
-                            _send_one_chunk_tx(video_id, ci, chunk, cn, w3.eth.gas_price, active_address)
+                            _send_one_chunk_tx(video_id, ci, chunk, cn, int(w3.eth.gas_price * 1.2), active_address)
                     job['progress'] += 1
 
-                nonce += len(batch)
+                nonce     += len(batch)
+                chunk_idx += len(batch)
+
+                # Adaptive sizing: grow on clean batch, shrink on real errors
+                if had_real_error:
+                    batch_size = max(batch_size - 5, _MIN_BATCH)
+                    print(f"[upload] batch error — backing off to {batch_size} chunks/batch")
+                else:
+                    batch_size = min(batch_size + 3, _MAX_BATCH)
+                    print(f"[upload] clean batch — stepping up to {batch_size} chunks/batch")
 
         job['status'] = 'complete'
     except Exception as e:
