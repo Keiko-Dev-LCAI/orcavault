@@ -1230,7 +1230,7 @@ def lighttube_set_override():
         return jsonify({'error': 'videoId required'}), 400
     overrides = load_lt_overrides()
     entry = overrides.get(vid, {})
-    for field in ('title', 'description', 'category'):
+    for field in ('title', 'description', 'category', 'uploader'):
         if field in body:
             entry[field] = body[field]
     overrides[vid] = entry
