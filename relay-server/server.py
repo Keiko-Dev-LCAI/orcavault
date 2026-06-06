@@ -1023,6 +1023,150 @@ def lighttube_moderation_lists():
         'banned_wallets':   list(get_banned_wallets_gh()),
     })
 
+# ─── OrcaMint moderation (GitHub-backed, survives all redeploys) ──────────────
+
+ORCAMINT_GITHUB_REPO   = "Keiko-Dev-LCAI/orcamint"
+ORCAMINT_GITHUB_BRANCH = "main"
+
+_om_perm_hidden_cache    = None   # set of permanently hidden token IDs
+_om_banned_wallets_cache = None   # set of permanently banned wallet addresses
+
+def _github_read_json_repo(repo, branch, path):
+    """Read a JSON file from any GitHub repo. Returns parsed data or None on error."""
+    if not GITHUB_TOKEN:
+        return None
+    api_url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    try:
+        req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            content = base64.b64decode(data["content"].replace("\n", "")).decode()
+            return json.loads(content)
+    except Exception:
+        return None
+
+def _github_write_json_repo(repo, branch, path, data, message):
+    """Write a JSON file to any GitHub repo. Creates or updates."""
+    if not GITHUB_TOKEN:
+        return False
+    api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"}
+    sha = None
+    try:
+        req = urllib.request.Request(f"{api_url}?ref={branch}", headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            sha = json.loads(r.read()).get("sha")
+    except Exception:
+        pass
+    content_b64 = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
+    body = {"message": message, "content": content_b64, "branch": branch}
+    if sha:
+        body["sha"] = sha
+    try:
+        req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            r.read()
+        return True
+    except Exception as e:
+        print(f"Warning: could not write {path} to {repo}: {e}")
+        return False
+
+def get_om_permanent_hidden():
+    """Return OrcaMint permanent hidden set. Loaded once per process startup."""
+    global _om_perm_hidden_cache
+    if _om_perm_hidden_cache is None:
+        from_github = _github_read_json_repo(ORCAMINT_GITHUB_REPO, ORCAMINT_GITHUB_BRANCH, "moderation/permanent_hidden.json") or []
+        _om_perm_hidden_cache = set(str(x) for x in from_github)
+    return _om_perm_hidden_cache
+
+def add_om_permanent_hidden(token_id):
+    """Permanently hide an OrcaMint NFT by token ID. Writes to GitHub in background."""
+    perm = get_om_permanent_hidden()
+    perm.add(str(token_id))
+    snapshot = list(perm)
+    threading.Thread(
+        target=_github_write_json_repo,
+        args=(ORCAMINT_GITHUB_REPO, ORCAMINT_GITHUB_BRANCH, "moderation/permanent_hidden.json", snapshot, f"Permanently hide token {token_id}"),
+        daemon=True
+    ).start()
+
+def get_om_banned_wallets():
+    """Return OrcaMint banned wallets set. Loaded once per process startup."""
+    global _om_banned_wallets_cache
+    if _om_banned_wallets_cache is None:
+        from_github = _github_read_json_repo(ORCAMINT_GITHUB_REPO, ORCAMINT_GITHUB_BRANCH, "moderation/banned_wallets.json") or []
+        _om_banned_wallets_cache = set(w.lower() for w in from_github)
+    return _om_banned_wallets_cache
+
+def add_om_banned_wallet(wallet):
+    """Permanently ban a wallet from OrcaMint. Writes to GitHub in background."""
+    banned = get_om_banned_wallets()
+    banned.add(wallet.lower())
+    snapshot = list(banned)
+    threading.Thread(
+        target=_github_write_json_repo,
+        args=(ORCAMINT_GITHUB_REPO, ORCAMINT_GITHUB_BRANCH, "moderation/banned_wallets.json", snapshot, f"Ban wallet {wallet[:10]}"),
+        daemon=True
+    ).start()
+
+@app.route('/api/orcamint/permanent-remove', methods=['POST'])
+def orcamint_permanent_remove():
+    """
+    Admin — permanently remove an OrcaMint NFT. Writes to GitHub so it survives all future redeploys.
+    Body: { tokenId: "5", adminKey: "secret" }
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    if body.get('adminKey') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    token_id = body.get('tokenId')
+    if token_id is None:
+        return jsonify({'error': 'tokenId required'}), 400
+    add_om_permanent_hidden(str(token_id))
+    print(f"[ORCAMINT MOD] Permanently removed token {token_id}")
+    return jsonify({'success': True, 'message': f'Token {token_id} permanently removed and written to GitHub'})
+
+@app.route('/api/orcamint/ban-wallet', methods=['POST'])
+def orcamint_ban_wallet():
+    """
+    Admin — permanently ban a wallet + optionally permanently remove their token.
+    Body: { wallet: "0x...", tokenId: "5" (optional), adminKey: "secret" }
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    if body.get('adminKey') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    wallet   = body.get('wallet', '').strip().lower()
+    token_id = body.get('tokenId')
+    if not wallet:
+        return jsonify({'error': 'wallet required'}), 400
+    add_om_banned_wallet(wallet)
+    if token_id is not None:
+        add_om_permanent_hidden(str(token_id))
+    print(f"[ORCAMINT MOD] Banned wallet {wallet[:10]}... token={token_id or 'none'}")
+    return jsonify({
+        'success': True,
+        'message': f'Wallet banned forever. Token {"permanently removed" if token_id is not None else "not changed"}.'
+    })
+
+@app.route('/api/orcamint/moderation-lists', methods=['GET'])
+def orcamint_moderation_lists():
+    """Admin — return permanent hidden token IDs and banned wallets. Admin key required."""
+    admin_key = request.args.get('adminKey', '')
+    if not LIGHTTUBE_ADMIN_KEY or admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({
+        'permanent_hidden': list(get_om_permanent_hidden()),
+        'banned_wallets':   list(get_om_banned_wallets()),
+    })
+
 @app.route('/api/lighttube/update-metadata', methods=['POST'])
 def lighttube_update_metadata():
     """
