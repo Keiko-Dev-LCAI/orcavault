@@ -151,17 +151,16 @@ V3_ABI = [
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 
 # ─── Web3 connection pool ─────────────────────────────────────────────────────
-# 10 reusable connections shared across upload threads. Much cheaper than
-# spawning a fresh HTTPS session per chunk transaction. Queue is thread-safe
-# by design — no race conditions.
-_W3_POOL_SIZE = 10
+# Must be >= _MAX_BATCH (25) to avoid pool-exhaustion timeouts when a full
+# parallel batch borrows connections simultaneously.
+_W3_POOL_SIZE = 30
 _w3_pool: queue.Queue = queue.Queue()
 for _i in range(_W3_POOL_SIZE):
     _w3_pool.put(Web3(Web3.HTTPProvider(RPC_URL)))
 
 def _borrow_w3() -> Web3:
-    """Get a Web3 connection from the pool. Blocks up to 60 s if all are busy."""
-    return _w3_pool.get(timeout=60)
+    """Get a Web3 connection from the pool. Blocks up to 90 s if all are busy."""
+    return _w3_pool.get(timeout=90)
 
 def _return_w3(conn: Web3) -> None:
     """Return a connection to the pool."""
