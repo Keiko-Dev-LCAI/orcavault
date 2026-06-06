@@ -34,7 +34,7 @@ Optional:
   PAID_WALLETS_FILE        = path to persistent JSON file (default: /data/paid_wallets.json)
 """
 
-import os, json, time, uuid, base64, threading, urllib.request
+import os, json, time, uuid, base64, threading, urllib.request, concurrent.futures
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from web3 import Web3
@@ -67,6 +67,7 @@ GITHUB_THUMB_REPO        = "Keiko-Dev-LCAI/lighttube"
 GITHUB_THUMB_BRANCH      = "main"
 CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
 CHAIN_ID                 = 9200
+CHUNK_BATCH_SIZE         = int(os.environ.get("CHUNK_BATCH_SIZE", "10"))  # parallel chunks per batch
 
 # LightTubeV2 ABI (relay functions only)
 LIGHTTUBE_V2_ABI = [
@@ -219,6 +220,23 @@ def save_thumbnail_github(filename, data_b64):
 
 # ─── LightTube relay upload ───────────────────────────────────────────────────
 
+def _send_one_chunk_tx(video_id, chunk_index, chunk_data, nonce, gas_price, contract_address):
+    """Send a single addVideoChunkFor transaction. Thread-safe — creates its own web3 connection."""
+    w3t        = Web3(Web3.HTTPProvider(RPC_URL))
+    ct         = w3t.eth.contract(address=Web3.to_checksum_address(contract_address), abi=LIGHTTUBE_V2_ABI)
+    relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+    tx = ct.functions.addVideoChunkFor(video_id, chunk_index, chunk_data).build_transaction({
+        'from':     relay_acct.address,
+        'nonce':    nonce,
+        'gas':      40_000_000,
+        'gasPrice': gas_price,
+        'chainId':  CHAIN_ID,
+    })
+    signed  = relay_acct.sign_transaction(tx)
+    tx_hash = w3t.eth.send_raw_transaction(signed.raw_transaction)
+    return w3t.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+
+
 def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, thumbnail_b64=None):
     """Background thread: chunk and store a video via LightTube relay functions (V3 preferred, V2 fallback)."""
     job = lt_upload_jobs[job_id]
@@ -278,20 +296,35 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, t
             except Exception as te:
                 print(f"Thumbnail save failed (non-fatal): {te}")
 
-        # ── addVideoChunkFor × N ──────────────────────────────────────
-        for i, chunk in enumerate(chunks):
-            tx = contract.functions.addVideoChunkFor(video_id, i, chunk).build_transaction({
-                'from':     relay_acct.address,
-                'nonce':    nonce,
-                'gas':      40_000_000,
-                'gasPrice': w3.eth.gas_price,
-                'chainId':  CHAIN_ID,
-            })
-            signed  = w3.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
-            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-            w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-            nonce += 1
-            job['progress'] = i + 1
+        # ── addVideoChunkFor × N (parallel batches of CHUNK_BATCH_SIZE) ────────
+        with concurrent.futures.ThreadPoolExecutor(max_workers=CHUNK_BATCH_SIZE) as pool:
+            for batch_start in range(0, len(chunks), CHUNK_BATCH_SIZE):
+                batch      = chunks[batch_start : batch_start + CHUNK_BATCH_SIZE]
+                gas_price  = w3.eth.gas_price
+                future_map = {}
+
+                # Fire all chunks in this batch simultaneously with pre-assigned nonces
+                for j, chunk in enumerate(batch):
+                    ci = batch_start + j
+                    cn = nonce + j
+                    f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunk, cn, gas_price, active_address)
+                    future_map[f] = (ci, cn, chunk)
+
+                # Wait for all confirmations; retry any that failed
+                for f in concurrent.futures.as_completed(future_map):
+                    ci, cn, chunk = future_map[f]
+                    try:
+                        f.result()
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if 'nonce too low' in err_str or 'already known' in err_str:
+                            pass  # tx was already mined — treat as success
+                        else:
+                            # One retry with a fresh gas price
+                            _send_one_chunk_tx(video_id, ci, chunk, cn, w3.eth.gas_price, active_address)
+                    job['progress'] += 1
+
+                nonce += len(batch)
 
         job['status'] = 'complete'
     except Exception as e:
