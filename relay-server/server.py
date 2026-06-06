@@ -89,6 +89,10 @@ LIGHTTUBE_V2_ABI = [
         {"indexed":False,"name":"totalChunks","type":"uint256"},
         {"indexed":False,"name":"timestamp","type":"uint256"}],
      "name":"VideoCreated","type":"event"},
+    {"inputs":[{"name":"videoId","type":"uint256"},{"name":"title","type":"string"},
+               {"name":"description","type":"string"},{"name":"category","type":"string"}],
+     "name":"updateMetadata","outputs":[],
+     "stateMutability":"nonpayable","type":"function"},
 ]
 
 # In-memory upload job tracker  {jobId: {status, progress, total, videoId, error}}
@@ -835,6 +839,49 @@ def lighttube_unhide():
     hidden.discard(str(video_id))
     save_hidden_videos(hidden)
     return jsonify({'success': True, 'hidden_count': len(hidden)})
+
+@app.route('/api/lighttube/update-metadata', methods=['POST'])
+def lighttube_update_metadata():
+    """
+    Admin endpoint — update title/description/category for a relay-uploaded video.
+    The relay wallet was the uploader on-chain, so it can sign the updateMetadata tx.
+    Body: { videoId: 4, title: "...", description: "...", category: "...", adminKey: "secret" }
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    if not LIGHTTUBE_V3_ADDRESS:
+        return jsonify({'error': 'V3 contract address not configured'}), 500
+    if not RELAY_PRIVATE_KEY:
+        return jsonify({'error': 'Relay key not configured'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    if body.get('adminKey', '') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    video_id   = body.get('videoId')
+    title      = body.get('title', '')
+    desc       = body.get('description', '')
+    category   = body.get('category', '')
+    if video_id is None:
+        return jsonify({'error': 'videoId required'}), 400
+    try:
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        ct = w3.eth.contract(
+            address=Web3.to_checksum_address(LIGHTTUBE_V3_ADDRESS),
+            abi=LIGHTTUBE_V2_ABI
+        )
+        nonce     = w3.eth.get_transaction_count(relay_acct.address)
+        gas_price = int(w3.eth.gas_price * 1.2)
+        tx = ct.functions.updateMetadata(int(video_id), title, desc, category).build_transaction({
+            'from': relay_acct.address, 'nonce': nonce,
+            'gas': 500_000, 'gasPrice': gas_price, 'chainId': CHAIN_ID,
+        })
+        signed  = relay_acct.sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        return jsonify({'success': True, 'txHash': tx_hash.hex(), 'status': receipt.status})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # ─── OrcaVault hidden memory registry ────────────────────────────────────────
 
