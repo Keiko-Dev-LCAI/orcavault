@@ -1456,13 +1456,33 @@ def _do_lt_upload(job_id, user_wallet, title, artist, genre, description, is_pub
         job['songId'] = song_id
         nonce += 1
 
-        # ── Save thumbnail to GitHub ──────────────────────────────────────────
+        # ── Save thumbnail to GitHub (LightTunes repo) ───────────────────────
         if thumbnail_b64:
             try:
                 import base64 as _b64
-                raw = _b64.b64decode(thumbnail_b64.split(',')[-1])
-                _github_write_binary_repo(LIGHTTUNES_GITHUB_REPO, LIGHTTUNES_GITHUB_BRANCH,
-                    f"thumbs/v1_{song_id}.jpg", raw, f"Thumbnail for song {song_id}")
+                b64_content = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
+                path    = f"thumbs/v1_{song_id}.jpg"
+                api_url = f"https://api.github.com/repos/{LIGHTTUNES_GITHUB_REPO}/contents/{path}"
+                headers = {
+                    "Authorization": f"token {GITHUB_TOKEN}",
+                    "Accept":        "application/vnd.github.v3+json",
+                    "Content-Type":  "application/json",
+                }
+                # get existing SHA for update
+                sha = None
+                try:
+                    req = urllib.request.Request(api_url, headers=headers)
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        sha = json.loads(r.read()).get("sha")
+                except Exception:
+                    pass
+                body = {"message": f"LightTunes thumbnail song {song_id}", "content": b64_content, "branch": LIGHTTUNES_GITHUB_BRANCH}
+                if sha:
+                    body["sha"] = sha
+                req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    r.read()
+                print(f"LightTunes thumbnail saved: {path}")
             except Exception as te:
                 print(f"LightTunes thumbnail save failed: {te}")
 
