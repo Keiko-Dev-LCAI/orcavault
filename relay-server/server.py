@@ -1285,6 +1285,401 @@ def orcavault_unhide():
     save_orcavault_hidden(hidden)
     return jsonify({'success': True, 'hidden_count': len(hidden)})
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LIGHTTUNES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+LIGHTTUNES_V1_ADDRESS    = os.environ.get("LIGHTTUNES_V1_ADDRESS", "")
+LIGHTTUNES_HIDDEN_FILE   = os.environ.get("LIGHTTUNES_HIDDEN_FILE", "/data/lighttunes_hidden.json")
+LIGHTTUNES_OVERRIDES_FILE= os.environ.get("LIGHTTUNES_OVERRIDES_FILE", "/data/lighttunes_overrides.json")
+LIGHTTUNES_HIDDEN_SEED   = {s.strip() for s in os.environ.get("LIGHTTUNES_HIDDEN_IDS", "").split(",") if s.strip()}
+LIGHTTUNES_GITHUB_REPO   = "Keiko-Dev-LCAI/lighttunes"
+LIGHTTUNES_GITHUB_BRANCH = "main"
+LIGHTTUNES_THUMBS_DIR    = os.environ.get("LIGHTTUNES_THUMBS_DIR", "/data/lt_thumbs2")
+
+# ─── LightTunesV1 ABI (relay functions only) ──────────────────────────────────
+LIGHTTUNES_ABI = [
+    {"inputs":[{"name":"uploader","type":"address"},{"name":"title","type":"string"},
+               {"name":"artist","type":"string"},{"name":"genre","type":"string"},
+               {"name":"description","type":"string"},{"name":"isPublic","type":"bool"},
+               {"name":"totalChunks","type":"uint256"}],
+     "name":"initSongFor","outputs":[{"name":"","type":"uint256"}],
+     "stateMutability":"nonpayable","type":"function"},
+    {"inputs":[{"name":"songId","type":"uint256"},{"name":"chunkIndex","type":"uint256"},
+               {"name":"chunkData","type":"string"}],
+     "name":"addSongChunkFor","outputs":[],
+     "stateMutability":"nonpayable","type":"function"},
+    {"inputs":[{"name":"relay","type":"address"}],
+     "name":"setRelayWallet","outputs":[],"stateMutability":"nonpayable","type":"function"},
+    {"anonymous":False,"inputs":[
+        {"indexed":True,"name":"songId","type":"uint256"},
+        {"indexed":True,"name":"uploader","type":"address"},
+        {"indexed":False,"name":"title","type":"string"},
+        {"indexed":False,"name":"artist","type":"string"},
+        {"indexed":False,"name":"genre","type":"string"},
+        {"indexed":False,"name":"description","type":"string"},
+        {"indexed":False,"name":"isPublic","type":"bool"},
+        {"indexed":False,"name":"totalChunks","type":"uint256"},
+        {"indexed":False,"name":"timestamp","type":"uint256"}],
+     "name":"SongCreated","type":"event"},
+    {"anonymous":False,"inputs":[
+        {"indexed":True,"name":"songId","type":"uint256"},
+        {"indexed":True,"name":"chunkIndex","type":"uint256"},
+        {"indexed":False,"name":"totalChunks","type":"uint256"},
+        {"indexed":False,"name":"chunkData","type":"string"}],
+     "name":"SongChunkStored","type":"event"},
+    {"anonymous":False,"inputs":[
+        {"indexed":True,"name":"songId","type":"uint256"},
+        {"indexed":True,"name":"uploader","type":"address"},
+        {"indexed":False,"name":"title","type":"string"},
+        {"indexed":False,"name":"artist","type":"string"},
+        {"indexed":False,"name":"genre","type":"string"},
+        {"indexed":False,"name":"description","type":"string"},
+        {"indexed":False,"name":"isPublic","type":"bool"},
+        {"indexed":False,"name":"timestamp","type":"uint256"}],
+     "name":"SongMetadataUpdated","type":"event"},
+]
+
+# ─── LightTunes in-memory job tracker ─────────────────────────────────────────
+lt_song_jobs = {}   # {jobId: {status, progress, total, songId, error}}
+
+# ─── LightTunes permanent hidden (GitHub-backed) ──────────────────────────────
+_lt_perm_hidden_cache    = None
+_lt_banned_wallets_cache = None
+
+def get_lt_permanent_hidden():
+    global _lt_perm_hidden_cache
+    if _lt_perm_hidden_cache is None:
+        _lt_perm_hidden_cache = set(str(x) for x in (_github_read_json_repo(LIGHTTUNES_GITHUB_REPO, LIGHTTUNES_GITHUB_BRANCH, "moderation/permanent_hidden.json") or []))
+    return _lt_perm_hidden_cache
+
+def add_lt_permanent_hidden(song_id):
+    perm = get_lt_permanent_hidden()
+    perm.add(str(song_id))
+    snapshot = sorted(perm)
+    threading.Thread(target=_github_write_json_repo,
+        args=(LIGHTTUNES_GITHUB_REPO, LIGHTTUNES_GITHUB_BRANCH,
+              "moderation/permanent_hidden.json", snapshot, f"Permanently hide {song_id}"),
+        daemon=True).start()
+
+def get_lt_banned_wallets():
+    global _lt_banned_wallets_cache
+    if _lt_banned_wallets_cache is None:
+        _lt_banned_wallets_cache = set(str(x).lower() for x in (_github_read_json_repo(LIGHTTUNES_GITHUB_REPO, LIGHTTUNES_GITHUB_BRANCH, "moderation/banned_wallets.json") or []))
+    return _lt_banned_wallets_cache
+
+def add_lt_banned_wallet(wallet):
+    bans = get_lt_banned_wallets()
+    bans.add(wallet.lower())
+    snapshot = sorted(bans)
+    threading.Thread(target=_github_write_json_repo,
+        args=(LIGHTTUNES_GITHUB_REPO, LIGHTTUNES_GITHUB_BRANCH,
+              "moderation/banned_wallets.json", snapshot, f"Ban wallet {wallet[:10]}"),
+        daemon=True).start()
+
+# ─── LightTunes hidden file helpers ───────────────────────────────────────────
+def load_lt_hidden():
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUNES_HIDDEN_FILE), exist_ok=True)
+        with open(LIGHTTUNES_HIDDEN_FILE, 'r') as f:
+            from_disk = set(str(x) for x in json.load(f))
+    except Exception:
+        from_disk = set()
+    return from_disk | LIGHTTUNES_HIDDEN_SEED | get_lt_permanent_hidden()
+
+def save_lt_hidden(hidden):
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUNES_HIDDEN_FILE), exist_ok=True)
+        with open(LIGHTTUNES_HIDDEN_FILE, 'w') as f:
+            json.dump(sorted(hidden), f)
+    except Exception as e:
+        print(f"Warning: could not save lt_hidden: {e}")
+
+def load_lt_overrides():
+    try:
+        with open(LIGHTTUNES_OVERRIDES_FILE, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_lt_overrides(overrides):
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUNES_OVERRIDES_FILE), exist_ok=True)
+        with open(LIGHTTUNES_OVERRIDES_FILE, 'w') as f:
+            json.dump(overrides, f, indent=2)
+    except Exception as e:
+        print(f"Warning: could not save lt_overrides: {e}")
+
+# ─── LightTunes chunk upload helpers ──────────────────────────────────────────
+def _send_one_lt_chunk_tx(song_id, chunk_index, chunk_data, nonce, gas_price, contract_address):
+    w3t = _borrow_w3()
+    try:
+        ct  = w3t.eth.contract(address=Web3.to_checksum_address(contract_address), abi=LIGHTTUNES_ABI)
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        tx = ct.functions.addSongChunkFor(song_id, chunk_index, chunk_data).build_transaction({
+            'from': relay_acct.address, 'nonce': nonce, 'gas': 12_000_000,
+            'gasPrice': gas_price, 'chainId': CHAIN_ID,
+        })
+        signed  = relay_acct.sign_transaction(tx)
+        tx_hash = w3t.eth.send_raw_transaction(signed.raw_transaction)
+        return w3t.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+    finally:
+        _return_w3(w3t)
+
+def _do_lt_upload(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64=None):
+    """Background thread: chunk and store a song via LightTunes relay."""
+    job = lt_song_jobs[job_id]
+    try:
+        if not LIGHTTUNES_V1_ADDRESS:
+            raise Exception("LIGHTTUNES_V1_ADDRESS not configured in Railway")
+        w3 = Web3(Web3.HTTPProvider(RPC_URL))
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        contract   = w3.eth.contract(address=Web3.to_checksum_address(LIGHTTUNES_V1_ADDRESS), abi=LIGHTTUNES_ABI)
+        chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
+        job['total'] = len(chunks)
+
+        # ── initSongFor ───────────────────────────────────────────────────────
+        job['status'] = 'initializing'
+        nonce = w3.eth.get_transaction_count(relay_acct.address, 'pending')
+        gas_price = int(w3.eth.gas_price * 1.2)
+        tx = contract.functions.initSongFor(
+            Web3.to_checksum_address(user_wallet), title, artist, genre, description, is_public, len(chunks)
+        ).build_transaction({'from': relay_acct.address, 'nonce': nonce, 'gas': 500_000,
+                              'gasPrice': gas_price, 'chainId': CHAIN_ID})
+        signed  = relay_acct.sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        song_id_raw = contract.events.SongCreated().process_receipt(receipt)
+        song_id = int(song_id_raw[0]['args']['songId']) if song_id_raw else None
+        if song_id is None:
+            raise Exception("Could not determine songId from initSongFor receipt")
+        job['songId'] = song_id
+        nonce += 1
+
+        # ── Save thumbnail to GitHub ──────────────────────────────────────────
+        if thumbnail_b64:
+            try:
+                import base64 as _b64
+                raw = _b64.b64decode(thumbnail_b64.split(',')[-1])
+                _github_write_binary_repo(LIGHTTUNES_GITHUB_REPO, LIGHTTUNES_GITHUB_BRANCH,
+                    f"thumbs/v1_{song_id}.jpg", raw, f"Thumbnail for song {song_id}")
+            except Exception as te:
+                print(f"LightTunes thumbnail save failed: {te}")
+
+        # ── addSongChunkFor × N ───────────────────────────────────────────────
+        job['status'] = 'uploading'
+        batch_size = max(CHUNK_BATCH_SIZE, 15)
+        chunk_idx  = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
+            while chunk_idx < len(chunks):
+                batch      = chunks[chunk_idx : chunk_idx + batch_size]
+                gas_price  = int(w3.eth.gas_price * 1.2)
+                future_map = {}
+                had_real_error = False
+                for j, chunk in enumerate(batch):
+                    ci = chunk_idx + j
+                    cn = nonce + j
+                    f  = pool.submit(_send_one_lt_chunk_tx, song_id, ci, chunk, cn, gas_price, LIGHTTUNES_V1_ADDRESS)
+                    future_map[f] = (ci, cn, chunk)
+                for f in concurrent.futures.as_completed(future_map):
+                    ci, cn, chunk = future_map[f]
+                    try:
+                        f.result()
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if 'nonce too low' in err_str or 'already known' in err_str:
+                            pass
+                        else:
+                            had_real_error = True
+                            _send_one_lt_chunk_tx(song_id, ci, chunk, cn, int(w3.eth.gas_price * 1.2), LIGHTTUNES_V1_ADDRESS)
+                    job['progress'] += 1
+                nonce     += len(batch)
+                chunk_idx += len(batch)
+                if had_real_error:
+                    batch_size = max(batch_size - 5, _MIN_BATCH)
+                else:
+                    batch_size = min(batch_size + 3, _MAX_BATCH)
+
+        job['status'] = 'complete'
+        print(f"LightTunes upload complete [{job_id}]: songId={song_id}, chunks={len(chunks)}")
+    except Exception as e:
+        print(f"LightTunes upload error [{job_id}]: {e}")
+        job['status'] = 'error'
+        job['error']  = str(e) or repr(e)
+
+# ─── LightTunes API endpoints ─────────────────────────────────────────────────
+
+@app.route('/api/lighttunes/upload', methods=['POST'])
+def lighttunes_upload():
+    """Relay upload endpoint for LightTunes songs."""
+    if not RELAY_PRIVATE_KEY:
+        return jsonify({'error': 'Relay not configured'}), 500
+    if LIGHTTUBE_MAINTENANCE:
+        return jsonify({'error': 'LightTunes is in maintenance mode'}), 503
+
+    user_wallet = request.form.get('wallet', '').strip()
+    signature   = request.form.get('signature', '').strip()
+    title       = request.form.get('title', '').strip() or 'Untitled'
+    artist      = request.form.get('artist', '').strip()
+    genre       = request.form.get('genre', '').strip() or 'Other'
+    description = request.form.get('description', '').strip()
+    is_public   = request.form.get('isPublic', 'true').lower() in ('true', '1', 'yes')
+    thumbnail_b64 = request.form.get('thumbnail', '')
+
+    if not user_wallet:
+        return jsonify({'error': 'wallet required'}), 400
+
+    # Verify wallet signature
+    try:
+        msg = encode_defunct(text=f"LightTunes upload: {user_wallet.lower()}")
+        recovered = Account.recover_message(msg, signature=signature)
+        if recovered.lower() != user_wallet.lower():
+            return jsonify({'error': 'Signature verification failed'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature error: {e}'}), 401
+
+    # Check banned wallet
+    if user_wallet.lower() in get_lt_banned_wallets():
+        return jsonify({'error': 'Wallet is banned from LightTunes'}), 403
+
+    # Read audio file
+    audio_file = request.files.get('audio')
+    if not audio_file:
+        return jsonify({'error': 'audio file required'}), 400
+
+    import base64 as _b64
+    audio_bytes = audio_file.read()
+    mime_type   = audio_file.content_type or 'audio/mpeg'
+    data_uri    = f"data:{mime_type};base64," + _b64.b64encode(audio_bytes).decode()
+
+    job_id = str(uuid.uuid4())[:8]
+    lt_song_jobs[job_id] = {'status': 'queued', 'progress': 0, 'total': 0, 'songId': None, 'error': None}
+    threading.Thread(target=_do_lt_upload, daemon=True,
+        args=(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64)).start()
+    return jsonify({'jobId': job_id})
+
+@app.route('/api/lighttunes/upload-progress/<job_id>', methods=['GET'])
+def lighttunes_upload_progress(job_id):
+    job = lt_song_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify(job)
+
+@app.route('/api/lighttunes/hidden', methods=['GET'])
+def lighttunes_get_hidden():
+    hidden = load_lt_hidden()
+    return jsonify({'hidden': list(hidden)})
+
+@app.route('/api/lighttunes/hide', methods=['POST'])
+def lighttunes_hide():
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured'}), 500
+    body = request.get_json()
+    if not body or body.get('adminKey', '') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    song_id = body.get('songId')
+    if song_id is None:
+        return jsonify({'error': 'songId required'}), 400
+    hidden = load_lt_hidden()
+    hidden.add(str(song_id))
+    save_lt_hidden(hidden)
+    return jsonify({'success': True})
+
+@app.route('/api/lighttunes/unhide', methods=['POST'])
+def lighttunes_unhide():
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured'}), 500
+    body = request.get_json()
+    if not body or body.get('adminKey', '') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    song_id = body.get('songId')
+    if song_id is None:
+        return jsonify({'error': 'songId required'}), 400
+    hidden = load_lt_hidden()
+    hidden.discard(str(song_id))
+    save_lt_hidden(hidden)
+    return jsonify({'success': True})
+
+@app.route('/api/lighttunes/permanent-remove', methods=['POST'])
+def lighttunes_permanent_remove():
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured'}), 500
+    body = request.get_json()
+    if not body or body.get('adminKey', '') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    song_id = str(body.get('songId', ''))
+    if not song_id:
+        return jsonify({'error': 'songId required'}), 400
+    add_lt_permanent_hidden(song_id)
+    hidden = load_lt_hidden()
+    hidden.add(song_id)
+    save_lt_hidden(hidden)
+    return jsonify({'success': True, 'message': f'Song {song_id} permanently removed and written to GitHub'})
+
+@app.route('/api/lighttunes/ban-wallet', methods=['POST'])
+def lighttunes_ban_wallet():
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured'}), 500
+    body = request.get_json()
+    if not body or body.get('adminKey', '') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    wallet  = body.get('wallet', '').strip()
+    song_id = str(body.get('songId', '')) if body.get('songId') else None
+    if not wallet:
+        return jsonify({'error': 'wallet required'}), 400
+    add_lt_banned_wallet(wallet)
+    if song_id:
+        add_lt_permanent_hidden(song_id)
+        hidden = load_lt_hidden()
+        hidden.add(song_id)
+        save_lt_hidden(hidden)
+    return jsonify({'success': True, 'message': f'Wallet banned. Song {"removed" if song_id else "unchanged"}.'})
+
+@app.route('/api/lighttunes/moderation-lists', methods=['GET'])
+def lighttunes_moderation_lists():
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured'}), 500
+    if request.args.get('adminKey', '') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({
+        'permanent_hidden': list(get_lt_permanent_hidden()),
+        'banned_wallets':   list(get_lt_banned_wallets()),
+    })
+
+@app.route('/api/lighttunes/overrides', methods=['GET'])
+def lighttunes_get_overrides():
+    return jsonify(load_lt_overrides())
+
+@app.route('/api/lighttunes/set-override', methods=['POST'])
+def lighttunes_set_override():
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured'}), 500
+    body = request.get_json()
+    if not body or body.get('adminKey', '') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    sid = str(body.get('songId', ''))
+    if not sid:
+        return jsonify({'error': 'songId required'}), 400
+    overrides = load_lt_overrides()
+    entry = overrides.get(sid, {})
+    for field in ('title', 'artist', 'genre', 'description', 'uploader'):
+        if field in body:
+            entry[field] = body[field]
+    overrides[sid] = entry
+    save_lt_overrides(overrides)
+    return jsonify({'success': True, 'songId': sid, 'override': entry})
+
+@app.route('/api/lighttunes/thumbnail/<path:filename>', methods=['GET'])
+def lighttunes_thumbnail(filename):
+    """Serve thumbnails from disk if present."""
+    thumb_path = os.path.join(LIGHTTUNES_THUMBS_DIR, filename)
+    if os.path.exists(thumb_path):
+        from flask import send_file
+        return send_file(thumb_path, mimetype='image/jpeg')
+    return '', 404
+
+# ─── end LightTunes ───────────────────────────────────────────────────────────
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8190))
     app.run(host='0.0.0.0', port=port)
