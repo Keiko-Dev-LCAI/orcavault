@@ -1296,6 +1296,64 @@ LIGHTTUNES_HIDDEN_SEED   = {s.strip() for s in os.environ.get("LIGHTTUNES_HIDDEN
 LIGHTTUNES_GITHUB_REPO   = "Keiko-Dev-LCAI/lighttunes"
 LIGHTTUNES_GITHUB_BRANCH = "main"
 LIGHTTUNES_THUMBS_DIR    = os.environ.get("LIGHTTUNES_THUMBS_DIR", "/data/lt_thumbs2")
+LIGHTTUNES_FEE_USD       = float(os.environ.get("LIGHTTUNES_FEE_USD", "0.50"))
+LIGHTTUNES_FEE_WALLET    = os.environ.get("LIGHTTUNES_FEE_WALLET", "").strip().lower()
+LIGHTTUNES_USED_TX_FILE  = os.environ.get("LIGHTTUNES_USED_TX_FILE", "/data/lighttunes_used_tx.json")
+
+# ─── LCAI price feed (cached 5 min) ─────────────────────────────────────────
+_lt_price_cache = {'price': None, 'ts': 0}
+
+def _get_lcai_price_usd():
+    """Fetch LCAI/USD price. Tries CoinGecko then DexScreener; caches 5 min."""
+    global _lt_price_cache
+    import urllib.request as _ur
+    if time.time() - _lt_price_cache['ts'] < 300 and _lt_price_cache['price']:
+        return _lt_price_cache['price']
+    for cg_id in ('lightchain-ai', 'lightchain'):
+        try:
+            req = _ur.Request(
+                f'https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd',
+                headers={'Accept': 'application/json', 'User-Agent': 'LightTunes/1.0'})
+            with _ur.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read())
+            price = data.get(cg_id, {}).get('usd')
+            if price and float(price) > 0:
+                _lt_price_cache = {'price': float(price), 'ts': time.time()}
+                return float(price)
+        except Exception:
+            pass
+    try:
+        req = _ur.Request('https://api.dexscreener.com/latest/dex/search?q=LCAI',
+                          headers={'Accept': 'application/json', 'User-Agent': 'LightTunes/1.0'})
+        with _ur.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read())
+        for pair in data.get('pairs', []):
+            if pair.get('baseToken', {}).get('symbol', '').upper() == 'LCAI':
+                price = float(pair.get('priceUsd', 0))
+                if price > 0:
+                    _lt_price_cache = {'price': price, 'ts': time.time()}
+                    return price
+    except Exception:
+        pass
+    if _lt_price_cache['price']:
+        return _lt_price_cache['price']
+    return 0.004  # last-resort fallback
+
+# ─── Used-tx tracking (prevents replay attacks) ──────────────────────────────
+def _load_used_tx():
+    try:
+        with open(LIGHTTUNES_USED_TX_FILE) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def _save_used_tx(hashes: set):
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUNES_USED_TX_FILE), exist_ok=True)
+        with open(LIGHTTUNES_USED_TX_FILE, 'w') as f:
+            json.dump(list(hashes), f)
+    except Exception as e:
+        print(f"Warning: could not save used_tx: {e}")
 
 # ─── LightTunesV1 ABI (relay functions only) ──────────────────────────────────
 LIGHTTUNES_ABI = [
@@ -1531,6 +1589,18 @@ def _do_lt_upload(job_id, user_wallet, title, artist, genre, description, is_pub
 
 # ─── LightTunes API endpoints ─────────────────────────────────────────────────
 
+@app.route('/api/lighttunes/fee', methods=['GET'])
+def lighttunes_fee():
+    """Return current upload fee in LCAI and USD."""
+    price = _get_lcai_price_usd()
+    fee_lcai = round(LIGHTTUNES_FEE_USD / price, 2) if price > 0 else None
+    return jsonify({
+        'fee_usd':    LIGHTTUNES_FEE_USD,
+        'fee_lcai':   fee_lcai,
+        'lcai_price': price,
+        'fee_wallet': LIGHTTUNES_FEE_WALLET,
+    })
+
 @app.route('/api/lighttunes/upload', methods=['POST'])
 def lighttunes_upload():
     """Relay upload endpoint for LightTunes songs."""
@@ -1539,14 +1609,15 @@ def lighttunes_upload():
     if LIGHTTUBE_MAINTENANCE:
         return jsonify({'error': 'LightTunes is in maintenance mode'}), 503
 
-    user_wallet = request.form.get('wallet', '').strip()
-    signature   = request.form.get('signature', '').strip()
-    title       = request.form.get('title', '').strip() or 'Untitled'
-    artist      = request.form.get('artist', '').strip()
-    genre       = request.form.get('genre', '').strip() or 'Other'
-    description = request.form.get('description', '').strip()
-    is_public   = request.form.get('isPublic', 'true').lower() in ('true', '1', 'yes')
+    user_wallet   = request.form.get('wallet', '').strip()
+    signature     = request.form.get('signature', '').strip()
+    title         = request.form.get('title', '').strip() or 'Untitled'
+    artist        = request.form.get('artist', '').strip()
+    genre         = request.form.get('genre', '').strip() or 'Other'
+    description   = request.form.get('description', '').strip()
+    is_public     = request.form.get('isPublic', 'true').lower() in ('true', '1', 'yes')
     thumbnail_b64 = request.form.get('thumbnail', '')
+    payment_tx    = request.form.get('paymentTxHash', '').strip()
 
     if not user_wallet:
         return jsonify({'error': 'wallet required'}), 400
@@ -1563,6 +1634,40 @@ def lighttunes_upload():
     # Check banned wallet
     if user_wallet.lower() in get_lt_banned_wallets():
         return jsonify({'error': 'Wallet is banned from LightTunes'}), 403
+
+    # ── Fee verification (skip for owner wallets) ────────────────────────────
+    if user_wallet.lower() not in OWNER_WALLETS:
+        if not LIGHTTUNES_FEE_WALLET:
+            return jsonify({'error': 'Upload fee not configured — contact admin'}), 503
+        if not payment_tx:
+            return jsonify({'error': 'Upload fee required — paymentTxHash missing'}), 402
+
+        # Check tx hasn't been used before
+        used = _load_used_tx()
+        if payment_tx.lower() in used:
+            return jsonify({'error': 'This payment transaction has already been used'}), 400
+
+        # Verify on-chain
+        try:
+            tx = w3.eth.get_transaction(payment_tx)
+        except Exception:
+            return jsonify({'error': 'Payment transaction not found on chain — wait a moment and retry'}), 404
+
+        if tx['from'].lower() != user_wallet.lower():
+            return jsonify({'error': 'Payment was not sent from your wallet'}), 400
+        if tx.get('to', '').lower() != LIGHTTUNES_FEE_WALLET.lower():
+            return jsonify({'error': 'Payment was not sent to the correct fee wallet'}), 400
+
+        price    = _get_lcai_price_usd()
+        required = Web3.to_wei(LIGHTTUNES_FEE_USD / price * 0.90, 'ether')  # 10% slippage tolerance
+        if tx['value'] < required:
+            paid = float(w3.from_wei(tx['value'], 'ether'))
+            needed = round(LIGHTTUNES_FEE_USD / price, 2)
+            return jsonify({'error': f'Payment too small: sent {paid:.4f} LCAI, required ~{needed} LCAI'}), 400
+
+        # Mark tx as used
+        used.add(payment_tx.lower())
+        _save_used_tx(used)
 
     # Read audio file
     audio_file = request.files.get('audio')
@@ -1687,6 +1792,8 @@ def lighttunes_set_override():
     for field in ('title', 'artist', 'genre', 'description', 'uploader'):
         if field in body:
             entry[field] = body[field]
+    if 'forceExplicit' in body:
+        entry['forceExplicit'] = bool(body['forceExplicit'])
     overrides[sid] = entry
     save_lt_overrides(overrides)
     return jsonify({'success': True, 'songId': sid, 'override': entry})
