@@ -1487,6 +1487,8 @@ def _do_lt_upload(job_id, user_wallet, title, artist, genre, description, is_pub
                 print(f"LightTunes thumbnail save failed: {te}")
 
         # ── addSongChunkFor × N ───────────────────────────────────────────────
+        _MAX_BATCH = 25
+        _MIN_BATCH = 8
         job['status'] = 'uploading'
         batch_size = max(CHUNK_BATCH_SIZE, 15)
         chunk_idx  = 0
