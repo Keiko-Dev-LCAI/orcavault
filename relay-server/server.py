@@ -1285,6 +1285,37 @@ def orcavault_unhide():
     save_orcavault_hidden(hidden)
     return jsonify({'success': True, 'hidden_count': len(hidden)})
 
+@app.route('/api/orcavault/report', methods=['POST'])
+def orcavault_report():
+    """Anyone can report a memory. Stores report for admin review."""
+    body = request.get_json() or {}
+    memory_id = body.get('memoryId', 'unknown')
+    vault_id  = body.get('vaultId', 'unknown')
+    reason    = body.get('reason', 'No reason given')
+    reporter  = body.get('reporter', 'anonymous')
+    report_entry = {
+        'memoryId': memory_id,
+        'vaultId':  vault_id,
+        'reason':   reason,
+        'reporter': reporter,
+        'timestamp': time.time(),
+    }
+    # Append to reports file
+    reports_file = os.environ.get("ORCAVAULT_REPORTS_FILE", "/data/orcavault_reports.json")
+    try:
+        try:
+            with open(reports_file, 'r') as f:
+                reports = json.load(f)
+        except Exception:
+            reports = []
+        reports.append(report_entry)
+        with open(reports_file, 'w') as f:
+            json.dump(reports, f, indent=2)
+    except Exception as e:
+        print(f"Warning: could not save report: {e}")
+    print(f"OrcaVault report: vault={vault_id} memory={memory_id} reason={reason} reporter={reporter}")
+    return jsonify({'success': True})
+
 @app.route('/api/orcavault/creator-delete', methods=['POST'])
 def orcavault_creator_delete():
     """Creator self-delete — wallet must sign a message to prove ownership.
