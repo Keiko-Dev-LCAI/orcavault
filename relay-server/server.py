@@ -1285,6 +1285,33 @@ def orcavault_unhide():
     save_orcavault_hidden(hidden)
     return jsonify({'success': True, 'hidden_count': len(hidden)})
 
+@app.route('/api/orcavault/creator-delete', methods=['POST'])
+def orcavault_creator_delete():
+    """Creator self-delete — wallet must sign a message to prove ownership.
+    Body: { memoryId: "N", wallet: "0x...", signature: "0x...", message: "..." }"""
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    memory_id = body.get('memoryId')
+    wallet_addr = body.get('wallet', '').strip().lower()
+    signature   = body.get('signature', '')
+    message     = body.get('message', '')
+    if not memory_id or not wallet_addr or not signature or not message:
+        return jsonify({'error': 'memoryId, wallet, signature, and message are required'}), 400
+    # Verify signature — recover signer from the signed message
+    try:
+        msg_hash = encode_defunct(text=message)
+        recovered = Account.recover_message(msg_hash, signature=signature)
+        if recovered.lower() != wallet_addr:
+            return jsonify({'error': 'Signature mismatch — could not verify wallet ownership'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature verification failed: {str(e)}'}), 401
+    # Add to hidden list
+    hidden = load_orcavault_hidden()
+    hidden.add(str(memory_id))
+    save_orcavault_hidden(hidden)
+    return jsonify({'success': True})
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LIGHTTUNES
 # ═══════════════════════════════════════════════════════════════════════════════

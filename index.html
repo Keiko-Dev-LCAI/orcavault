@@ -380,6 +380,34 @@ footer a{color:var(--gold);text-decoration:none}
 
 /* ── SIZE ESTIMATE HINT ── */
 .chunk-hint{background:rgba(155,127,232,0.08);border:1px solid rgba(155,127,232,0.3);border-radius:10px;padding:12px 16px;font-size:17px;color:var(--purple);margin-top:10px;display:flex;align-items:center;gap:8px}
+
+/* ── CAMERA RECORD BUTTON ── */
+#camera-record-btn{display:none;margin-top:12px;width:100%;padding:16px;border:2px dashed rgba(155,127,232,0.4);border-radius:12px;background:rgba(155,127,232,0.05);text-align:center;cursor:pointer;font-size:20px;font-weight:700;color:var(--purple);font-family:inherit;transition:all .2s}
+#camera-record-btn:hover{border-color:var(--purple);background:rgba(155,127,232,0.12)}
+.camera-or-divider{text-align:center;color:var(--muted);font-size:17px;margin:10px 0;display:none}
+
+/* ── CAMERA MODAL ── */
+#camera-modal{position:fixed;inset:0;background:#000;z-index:900;display:none;flex-direction:column;align-items:center;justify-content:center}
+#camera-modal.active{display:flex}
+#camera-preview{width:100%;max-width:480px;max-height:60vh;object-fit:cover;border-radius:12px;background:#111;display:block}
+#camera-recorded-preview{width:100%;max-width:480px;max-height:60vh;object-fit:cover;border-radius:12px;background:#111;display:none}
+.cam-controls{display:flex;gap:16px;align-items:center;margin-top:20px;flex-wrap:wrap;justify-content:center}
+#cam-record-btn{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:var(--red);cursor:pointer;transition:all .2s;flex-shrink:0}
+#cam-record-btn.recording{background:#fff;border-color:var(--red)}
+#cam-record-btn.recording::after{content:'';display:block;width:26px;height:26px;background:var(--red);border-radius:4px;margin:auto;margin-top:19px}
+.cam-timer{font-size:26px;font-weight:800;color:#fff;font-family:monospace;min-width:56px;text-align:center}
+.cam-flip-btn{width:50px;height:50px;border-radius:50%;border:2px solid rgba(255,255,255,0.4);background:rgba(255,255,255,0.1);color:#fff;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s}
+.cam-flip-btn:hover{background:rgba(255,255,255,0.25)}
+.cam-close-btn{position:absolute;top:18px;right:18px;background:rgba(0,0,0,0.5);border:none;color:#fff;font-size:28px;cursor:pointer;border-radius:50%;width:44px;height:44px;display:flex;align-items:center;justify-content:center;z-index:10}
+.cam-use-btns{display:flex;gap:12px;margin-top:14px;flex-wrap:wrap;justify-content:center}
+.cam-use-btn{padding:14px 28px;border-radius:10px;font-size:20px;font-weight:700;cursor:pointer;border:none;font-family:inherit}
+.cam-retake-btn{background:rgba(255,255,255,0.12);color:#fff;border:2px solid rgba(255,255,255,0.3)}
+.cam-confirm-btn{background:var(--gold);color:#0d0b18}
+.cam-hint{color:rgba(255,255,255,0.55);font-size:17px;margin-top:10px;text-align:center;max-width:380px}
+
+/* ── CREATOR DELETE ── */
+.creator-delete-btn{width:100%;padding:14px;border-radius:10px;border:1.5px solid rgba(232,82,82,0.4);background:transparent;color:var(--red);font-size:18px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s;margin-top:10px}
+.creator-delete-btn:hover{background:rgba(232,82,82,0.1);border-color:var(--red)}
 </style>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#f59e0b">
@@ -801,6 +829,8 @@ footer a{color:var(--gold);text-decoration:none}
       <input type="file" id="file-input" onchange="onFileSelect(event)">
       <div id="file-preview" style="margin-top:16px;display:none"></div>
       <div class="warn-banner" id="size-warning" style="display:none"></div>
+      <div class="camera-or-divider" id="camera-or-divider">— or —</div>
+      <button id="camera-record-btn" onclick="openCamera()">📹 Record Video with Camera</button>
     </div>
 
     <!-- Text input -->
@@ -865,6 +895,10 @@ footer a{color:var(--gold);text-decoration:none}
       </div>
       <div class="sidebar-section">
         <button class="btn btn-sm btn-outline" style="width:100%;justify-content:center;margin-bottom:10px" onclick="goViewVaultFromMemory()">← Back to Archive</button>
+        <div id="creator-delete-wrap" style="display:none">
+          <button class="creator-delete-btn" onclick="creatorDeleteMemory()">🗑️ Delete My Memory</button>
+          <p style="font-size:15px;color:var(--muted);margin-top:8px;line-height:1.5">Only you can delete your own memories. The blockchain record remains but it will be removed from this archive.</p>
+        </div>
       </div>
       <div class="sidebar-section">
         <div class="sidebar-section-title">Share This Memory</div>
@@ -950,6 +984,23 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="spinner"></div>
   <div class="loading-text" id="loading-text">Processing…</div>
   <div class="loading-sub" id="loading-sub">Please wait</div>
+</div>
+
+<!-- ── CAMERA RECORDING MODAL ── -->
+<div id="camera-modal">
+  <button class="cam-close-btn" onclick="closeCamera()">✕</button>
+  <video id="camera-preview" autoplay muted playsinline></video>
+  <video id="camera-recorded-preview" controls playsinline></video>
+  <p class="cam-hint" id="cam-hint-text">Tap the red button to start recording</p>
+  <div class="cam-controls">
+    <button class="cam-flip-btn" id="cam-flip-btn" onclick="flipCamera()" title="Flip camera">🔄</button>
+    <button id="cam-record-btn" onclick="toggleCameraRecord()" title="Record"></button>
+    <span class="cam-timer" id="cam-timer">0:00</span>
+  </div>
+  <div class="cam-use-btns" id="cam-use-btns" style="display:none">
+    <button class="cam-use-btn cam-retake-btn" onclick="cameraRetake()">↩ Retake</button>
+    <button class="cam-use-btn cam-confirm-btn" onclick="useCameraClip()">✅ Use This Clip</button>
+  </div>
 </div>
 
 <!-- ── TERMS OF USE MODAL ── -->
@@ -1825,6 +1876,15 @@ async function loadAndShowMemory(vaultId, idx) {
       document.getElementById('vm-vault-breadcrumb').textContent = currentVaultData.name;
     }
 
+    // Creator delete — show only to the uploader
+    _currentViewMemIdx     = idx;
+    _currentViewMemAddedBy = mem.addedBy;
+    const deleteWrap = document.getElementById('creator-delete-wrap');
+    if (deleteWrap) {
+      const isOwner = wallet && mem.addedBy && wallet.toLowerCase() === mem.addedBy.toLowerCase();
+      deleteWrap.style.display = isOwner ? '' : 'none';
+    }
+
     // Share
     const shareUrl = getMemoryURL(vaultId, idx);
     const shareText = '"' + mem.title + '" — stored forever on Lightchain via Audio & Visual Archives';
@@ -1955,6 +2015,8 @@ function selectMemType(btn, type) {
   const fileInput  = document.getElementById('file-input');
   document.getElementById('file-preview').style.display = 'none';
   sizeWarn.style.display = 'none';
+  document.getElementById('camera-record-btn').style.display = 'none';
+  document.getElementById('camera-or-divider').style.display = 'none';
 
   if (type === 'text') {
     uploadWrap.style.display = 'none';
@@ -1972,6 +2034,8 @@ function selectMemType(btn, type) {
       uzIcon.textContent = '🎬'; uzText.textContent = 'Click or drag & drop a video';
       uzSub.textContent = 'Any size supported · MP4, MOV, WEBM · large files upload in chunks automatically';
       fileInput.accept = 'video/*';
+      document.getElementById('camera-record-btn').style.display = 'block';
+      document.getElementById('camera-or-divider').style.display = 'block';
     } else if (type === 'audio') {
       uploadLabel.textContent = 'Upload Audio';
       uzIcon.textContent = '🎵'; uzText.textContent = 'Click or drag & drop an audio file';
@@ -2715,6 +2779,181 @@ function copyMemoryLink(url, btn) {
       setTimeout(() => { btn.textContent = orig; }, 2000);
     })
     .catch(() => showToast('Copy failed', true));
+}
+
+// ════════════════════════════════════════════════════════
+//  📹 CAMERA RECORDING
+// ════════════════════════════════════════════════════════
+let cameraStream       = null;
+let mediaRecorder      = null;
+let cameraChunks       = [];
+let cameraRecording    = false;
+let cameraTimerInt     = null;
+let cameraSeconds      = 0;
+let cameraFacingMode   = 'user';   // 'user' = selfie, 'environment' = rear
+let cameraBlob         = null;
+
+async function openCamera() {
+  const modal = document.getElementById('camera-modal');
+  modal.classList.add('active');
+  document.getElementById('camera-recorded-preview').style.display = 'none';
+  document.getElementById('camera-preview').style.display = 'block';
+  document.getElementById('cam-use-btns').style.display = 'none';
+  document.getElementById('cam-record-btn').classList.remove('recording');
+  document.getElementById('cam-timer').textContent = '0:00';
+  document.getElementById('cam-hint-text').textContent = 'Tap the red button to start recording';
+  cameraBlob = null;
+  cameraRecording = false;
+  await startCameraStream();
+}
+
+async function startCameraStream() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+  }
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: cameraFacingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: true
+    });
+    document.getElementById('camera-preview').srcObject = cameraStream;
+  } catch(e) {
+    showToast('Camera not available: ' + e.message, true);
+    closeCamera();
+  }
+}
+
+async function flipCamera() {
+  cameraFacingMode = cameraFacingMode === 'user' ? 'environment' : 'user';
+  if (cameraRecording) {
+    stopCameraTimer();
+    mediaRecorder && mediaRecorder.stop();
+  }
+  await startCameraStream();
+}
+
+function toggleCameraRecord() {
+  if (cameraRecording) {
+    stopRecordingCamera();
+  } else {
+    startRecordingCamera();
+  }
+}
+
+function startRecordingCamera() {
+  if (!cameraStream) return;
+  cameraChunks = [];
+  cameraSeconds = 0;
+  cameraRecording = true;
+  document.getElementById('cam-record-btn').classList.add('recording');
+  document.getElementById('cam-hint-text').textContent = 'Recording… tap again to stop';
+  document.getElementById('cam-flip-btn').style.opacity = '0.3';
+  document.getElementById('cam-flip-btn').style.pointerEvents = 'none';
+
+  const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4'
+                 : MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9'
+                 : 'video/webm';
+  mediaRecorder = new MediaRecorder(cameraStream, { mimeType });
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) cameraChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    cameraBlob = new Blob(cameraChunks, { type: mimeType });
+    const url = URL.createObjectURL(cameraBlob);
+    const prev = document.getElementById('camera-recorded-preview');
+    prev.src = url;
+    prev.style.display = 'block';
+    document.getElementById('camera-preview').style.display = 'none';
+    document.getElementById('cam-use-btns').style.display = 'flex';
+    document.getElementById('cam-hint-text').textContent = 'Happy with this clip?';
+  };
+  mediaRecorder.start();
+
+  cameraTimerInt = setInterval(() => {
+    cameraSeconds++;
+    const m = Math.floor(cameraSeconds / 60);
+    const s = String(cameraSeconds % 60).padStart(2, '0');
+    document.getElementById('cam-timer').textContent = m + ':' + s;
+  }, 1000);
+}
+
+function stopRecordingCamera() {
+  cameraRecording = false;
+  stopCameraTimer();
+  document.getElementById('cam-record-btn').classList.remove('recording');
+  document.getElementById('cam-flip-btn').style.opacity = '';
+  document.getElementById('cam-flip-btn').style.pointerEvents = '';
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+}
+
+function stopCameraTimer() {
+  clearInterval(cameraTimerInt);
+  cameraTimerInt = null;
+  cameraSeconds = 0;
+  document.getElementById('cam-timer').textContent = '0:00';
+}
+
+function cameraRetake() {
+  document.getElementById('camera-recorded-preview').style.display = 'none';
+  document.getElementById('camera-preview').style.display = 'block';
+  document.getElementById('cam-use-btns').style.display = 'none';
+  document.getElementById('cam-hint-text').textContent = 'Tap the red button to start recording';
+  cameraBlob = null;
+  startCameraStream();
+}
+
+function useCameraClip() {
+  if (!cameraBlob) return;
+  const ext  = cameraBlob.type.includes('mp4') ? 'mp4' : 'webm';
+  const file = new File([cameraBlob], `camera-recording.${ext}`, { type: cameraBlob.type });
+  closeCamera();
+  processFile(file);
+  showToast('📹 Clip ready — fill in the details and upload!');
+}
+
+function closeCamera() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+  }
+  if (cameraTimerInt) { clearInterval(cameraTimerInt); cameraTimerInt = null; }
+  cameraRecording = false;
+  cameraBlob = null;
+  document.getElementById('camera-modal').classList.remove('active');
+}
+
+// ════════════════════════════════════════════════════════
+//  🗑️ CREATOR DELETE
+// ════════════════════════════════════════════════════════
+let _currentViewMemIdx = null;
+let _currentViewMemAddedBy = null;
+
+async function creatorDeleteMemory() {
+  if (!wallet || !RELAY_URL) return;
+  if (!confirm('Delete this memory from the archive? This cannot be undone — it will be removed from the app (the blockchain record remains as an immutable entry).')) return;
+  try {
+    const btn = document.querySelector('.creator-delete-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+
+    // Sign a message to prove wallet ownership
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer   = await provider.getSigner();
+    const message  = `Delete memory ${_currentViewMemIdx} from OrcaVault`;
+    const sig      = await signer.signMessage(message);
+
+    const res = await fetch(`${RELAY_URL}/api/orcavault/creator-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memoryId: String(_currentViewMemIdx), wallet, signature: sig, message })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { showToast(data.error || 'Delete failed', true); if (btn) { btn.disabled = false; btn.textContent = '🗑️ Delete My Memory'; } return; }
+    showToast('Memory deleted from archive');
+    goViewVaultFromMemory();
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+    const btn = document.querySelector('.creator-delete-btn');
+    if (btn) { btn.disabled = false; btn.textContent = '🗑️ Delete My Memory'; }
+  }
 }
 </script>
 <footer style="background:var(--bg2);border-top:1px solid var(--border);padding:18px 32px;text-align:center;font-size:15px;color:var(--muted);line-height:1.65;margin-top:40px">
