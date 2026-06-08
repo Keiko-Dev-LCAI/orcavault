@@ -905,7 +905,7 @@ def relay_status():
         'balance':      balance_lcai,
         'enough':       balance_lcai > 0.001,
         'paid_wallets': paid_count,
-        'fee_lcai':     RELAY_FEE_LCAI,
+        'fee_lcai':     BASE_FEE_LCAI,
     })
 
 @app.route('/api/lighttube/hidden', methods=['GET'])
