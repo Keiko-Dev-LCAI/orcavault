@@ -2,7 +2,7 @@
   "name": "Audio & Visual Archives",
   "short_name": "AV Archives",
   "description": "Your Personal Time Capsule on the Lightchain Blockchain",
-  "start_url": "/orcavault/",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#0d0f1a",
   "theme_color": "#f59e0b",
