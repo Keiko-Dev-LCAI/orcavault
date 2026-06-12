@@ -34,7 +34,7 @@ Optional:
   PAID_WALLETS_FILE        = path to persistent JSON file (default: /data/paid_wallets.json)
 """
 
-import os, json, time, uuid, base64, threading, urllib.request, concurrent.futures, queue
+import os, json, time, uuid, base64, threading, urllib.request, urllib.parse, concurrent.futures, queue, secrets
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from web3 import Web3
@@ -68,7 +68,13 @@ LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
 LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
-ANTHROPIC_API_KEY        = os.environ.get("ANTHROPIC_API_KEY", "")
+# ── AIVM (Lightchain decentralized inference) ────────────────────────────────
+_AIVM_GATEWAY  = "https://chat-api.mainnet.lightchain.ai"
+_AIVM_RELAY    = "wss://relay.mainnet.lightchain.ai/ws"
+_AIVM_RPC      = "https://rpc.mainnet.lightchain.ai"
+_AIVM_JOB_REG  = "0xfB15F90298e4CcD7106E76fFB5e520315cC42B0b"
+_AIVM_JOB_FEE  = 20_000_000_000_000_000   # 0.02 LCAI in wei
+_AIVM_CHAIN_ID = 9200
 GITHUB_THUMB_REPO        = "Keiko-Dev-LCAI/lighttube"
 GITHUB_THUMB_BRANCH      = "main"
 CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
@@ -1868,30 +1874,425 @@ def lighttunes_thumbnail(filename):
 
 # ─── end LightTunes ───────────────────────────────────────────────────────────
 
+# ─── AIVM Client ──────────────────────────────────────────────────────────────
+
+_AIVM_ABI = [
+    {
+        "name": "createSession", "type": "function", "stateMutability": "payable",
+        "inputs": [
+            {"name": "paramsHash",      "type": "bytes32"},
+            {"name": "worker",          "type": "address"},
+            {"name": "encWorkerKey",    "type": "bytes"},
+            {"name": "ephemeralPubKey", "type": "bytes"},
+            {"name": "initState",       "type": "bytes"},
+            {"name": "expiry",          "type": "uint256"},
+        ],
+        "outputs": [{"name": "sessionId", "type": "uint256"}],
+    },
+    {
+        "name": "submitJob", "type": "function", "stateMutability": "payable",
+        "inputs": [
+            {"name": "sessionId",  "type": "uint256"},
+            {"name": "promptHash", "type": "bytes32"},
+        ],
+        "outputs": [{"name": "jobId", "type": "uint256"}],
+    },
+    {
+        "anonymous": False, "name": "SessionCreated", "type": "event",
+        "inputs": [
+            {"indexed": True,  "name": "sessionId",      "type": "uint256"},
+            {"indexed": True,  "name": "user",            "type": "address"},
+            {"indexed": True,  "name": "paramsHash",      "type": "bytes32"},
+            {"indexed": False, "name": "worker",          "type": "address"},
+            {"indexed": False, "name": "encWorkerKey",    "type": "bytes"},
+            {"indexed": False, "name": "ephemeralPubKey", "type": "bytes"},
+        ],
+    },
+    {
+        "anonymous": False, "name": "JobSubmitted", "type": "event",
+        "inputs": [
+            {"indexed": True,  "name": "jobId",     "type": "uint256"},
+            {"indexed": True,  "name": "sessionId", "type": "uint256"},
+            {"indexed": False, "name": "worker",    "type": "address"},
+        ],
+    },
+    {
+        "anonymous": False, "name": "JobCompleted", "type": "event",
+        "inputs": [
+            {"indexed": True,  "name": "jobId",         "type": "uint256"},
+            {"indexed": True,  "name": "worker",         "type": "address"},
+            {"indexed": False, "name": "responseHash",   "type": "bytes32"},
+            {"indexed": False, "name": "ciphertextHash", "type": "bytes32"},
+        ],
+    },
+]
+
+
+def _aivm_decode_pubkey(s):
+    """Accept hex (with/without 0x) or base64; return 65-byte uncompressed P-256 point."""
+    if isinstance(s, (bytes, bytearray)):
+        return bytes(s)
+    s = s.strip()
+    if s.startswith('0x') or s.startswith('0X'):
+        b = bytes.fromhex(s[2:])
+    elif len(s) == 130 and all(c in '0123456789abcdefABCDEF' for c in s):
+        b = bytes.fromhex(s)
+    else:
+        b = base64.b64decode(s)
+    if len(b) != 65:
+        raise ValueError(f"pubkey decode: expected 65 bytes, got {len(b)}")
+    return b
+
+
+def _aivm_ecdh_wrap(session_key: bytes, peer_pub_bytes: bytes) -> bytes:
+    """ECDH-wrap session_key for peer P-256 pubkey. Returns ephemPub(65)||nonce(12)||ct||tag(16)."""
+    from cryptography.hazmat.primitives.asymmetric.ec import (
+        generate_private_key, ECDH, EllipticCurvePublicNumbers, SECP256R1
+    )
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.backends import default_backend
+
+    x = int.from_bytes(peer_pub_bytes[1:33], 'big')
+    y = int.from_bytes(peer_pub_bytes[33:65], 'big')
+    peer_pub = EllipticCurvePublicNumbers(x, y, SECP256R1()).public_key(default_backend())
+
+    ephem_priv = generate_private_key(SECP256R1(), default_backend())
+    shared = ephem_priv.exchange(ECDH(), peer_pub)
+
+    pub_nums = ephem_priv.public_key().public_numbers()
+    ephem_pub_bytes = (b'\x04' +
+                       pub_nums.x.to_bytes(32, 'big') +
+                       pub_nums.y.to_bytes(32, 'big'))
+
+    nonce  = secrets.token_bytes(12)
+    ct_tag = AESGCM(shared).encrypt(nonce, session_key, None)
+    return ephem_pub_bytes + nonce + ct_tag
+
+
+def _aivm_aes_encrypt(key: bytes, plaintext: bytes) -> bytes:
+    """AES-256-GCM encrypt. Returns nonce(12) || ct || tag(16)."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce = secrets.token_bytes(12)
+    return nonce + AESGCM(key).encrypt(nonce, plaintext, None)
+
+
+def _aivm_aes_decrypt(key: bytes, blob: bytes) -> bytes:
+    """AES-256-GCM decrypt nonce(12) || ct || tag(16)."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    if len(blob) < 28:
+        raise ValueError("ciphertext too short")
+    return AESGCM(key).decrypt(blob[:12], blob[12:], None)
+
+
+class AIVMClient:
+    """
+    Runs LLM inference through the Lightchain decentralized worker network.
+    Cost: ~0.022 LCAI per inference (0.02 worker fee + ~0.002 gas).
+    Uses RELAY_PRIVATE_KEY wallet (already funded for uploads).
+    """
+
+    def __init__(self, private_key: str):
+        import requests as _req
+        from web3 import Web3
+        from eth_account import Account
+
+        self._req      = _req
+        self._w3       = Web3(Web3.HTTPProvider(_AIVM_RPC))
+        self._account  = Account.from_key(private_key)
+        self._registry = self._w3.eth.contract(
+            address=Web3.to_checksum_address(_AIVM_JOB_REG),
+            abi=_AIVM_ABI,
+        )
+        self._jwt     = None
+        self._jwt_exp = 0
+        print(f"  [AIVM] relay wallet: {self._account.address}")
+
+    def _get_jwt(self) -> str:
+        from eth_account.messages import encode_defunct
+        if self._jwt and time.time() < self._jwt_exp - 30:
+            return self._jwt
+        req = self._req
+        r = req.get(
+            f"{_AIVM_GATEWAY}/api/auth/challenge",
+            params={"address": self._account.address}, timeout=15,
+        )
+        r.raise_for_status()
+        message = r.json()["message"]
+        sig = self._account.sign_message(encode_defunct(text=message))
+        r2 = req.post(
+            f"{_AIVM_GATEWAY}/api/auth/verify",
+            json={"message": message, "signature": "0x" + sig.signature.hex()},
+            timeout=15,
+        )
+        r2.raise_for_status()
+        v = r2.json()
+        self._jwt = v["token"]
+        exp_str = v["expiresAt"][:19].replace("T", " ")
+        self._jwt_exp = time.mktime(time.strptime(exp_str, "%Y-%m-%d %H:%M:%S"))
+        return self._jwt
+
+    def _auth_headers(self):
+        return {
+            "Authorization": f"Bearer {self._get_jwt()}",
+            "Accept":        "application/json",
+            "Content-Type":  "application/json",
+        }
+
+    def run_inference(self, prompt: str, timeout_secs: int = 360) -> str:
+        import websocket as _ws
+        from web3 import Web3
+
+        req = self._req
+        print(f"  [AIVM] starting inference ({len(prompt)} chars)")
+
+        # 1-2. Auth + pick model
+        r = req.get(f"{_AIVM_GATEWAY}/api/models", timeout=15)
+        r.raise_for_status()
+        models = r.json().get("models", [])
+        model  = next((m for m in models if m["name"] == "llama3-8b"), models[0] if models else None)
+        if not model:
+            raise RuntimeError("No models available from AIVM gateway")
+        model_id = model["id"]
+        print(f"  [AIVM] model: {model['name']} id={model_id[:10]}…")
+
+        # 3. Select worker
+        r = req.post(
+            f"{_AIVM_GATEWAY}/api/sessions/select",
+            json={"modelId": model_id},
+            headers=self._auth_headers(), timeout=15,
+        )
+        r.raise_for_status()
+        sel = r.json()
+        print(f"  [AIVM] worker: {sel['worker']}")
+
+        # 4-5. Session key + ECDH wrap
+        session_key  = secrets.token_bytes(32)
+        enc_worker   = _aivm_ecdh_wrap(session_key, _aivm_decode_pubkey(sel["workerEncryptionKey"]))
+        enc_disputer = _aivm_ecdh_wrap(session_key, _aivm_decode_pubkey(sel["disputerEncryptionKey"]))
+
+        # 6. Prepare
+        r = req.post(
+            f"{_AIVM_GATEWAY}/api/sessions/prepare",
+            json={
+                "modelId":        model_id,
+                "encWorkerKey":   base64.b64encode(enc_worker).decode(),
+                "encDisputerKey": base64.b64encode(enc_disputer).decode(),
+            },
+            headers=self._auth_headers(), timeout=15,
+        )
+        r.raise_for_status()
+        prep = r.json()
+
+        # 7. createSession on-chain
+        params_hash = bytes.fromhex(model_id[2:].zfill(64) if model_id[:2].lower() == "0x" else model_id.zfill(64))
+        sig_bytes   = bytes.fromhex(prep["signature"][2:] if prep["signature"][:2].lower() == "0x" else prep["signature"])
+
+        gas_price = self._w3.eth.gas_price
+        nonce_val = self._w3.eth.get_transaction_count(self._account.address)
+
+        tx = self._registry.functions.createSession(
+            params_hash,
+            Web3.to_checksum_address(prep["worker"]),
+            enc_worker,
+            enc_disputer,
+            sig_bytes,
+            prep["expiry"],
+        ).build_transaction({
+            "from":     self._account.address,
+            "nonce":    nonce_val,
+            "gas":      1_000_000,
+            "gasPrice": gas_price,
+            "value":    0,
+            "chainId":  _AIVM_CHAIN_ID,
+        })
+        signed  = self._account.sign_transaction(tx)
+        tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
+        print(f"  [AIVM] createSession tx: {tx_hash.hex()}")
+        receipt1 = self._w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
+        if receipt1.status != 1:
+            raise RuntimeError("createSession reverted on-chain")
+
+        session_id = None
+        for log in receipt1.logs:
+            try:
+                evt = self._registry.events.SessionCreated().process_log(log)
+                session_id = evt["args"]["sessionId"]
+                break
+            except Exception:
+                pass
+        if session_id is None:
+            raise RuntimeError("SessionCreated event not found in receipt")
+        print(f"  [AIVM] sessionId: {session_id}")
+
+        # 8. Open relay WebSocket
+        relay_token = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            r = req.get(
+                f"{_AIVM_GATEWAY}/api/sessions/{session_id}/token",
+                headers=self._auth_headers(), timeout=10,
+            )
+            if r.status_code == 200:
+                d = r.json()
+                if d.get("token"):
+                    relay_token = d["token"]
+                    break
+            time.sleep(1)
+        if not relay_token:
+            raise RuntimeError("Relay token not ready within 30s")
+
+        chunks   = []
+        ws_ready = threading.Event()
+        ws_err   = [None]
+
+        def _on_message(ws_obj, message):
+            try:
+                frame = json.loads(message)
+                payload = frame.get("payload")
+                if not payload:
+                    return
+                blob = base64.b64decode(payload)
+                try:
+                    pt = _aivm_aes_decrypt(session_key, blob)
+                    chunks.append(pt.decode("utf-8", errors="replace"))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        def _on_open(ws_obj):
+            ws_ready.set()
+
+        def _on_error(ws_obj, err):
+            ws_err[0] = err
+            ws_ready.set()
+
+        ws = _ws.WebSocketApp(
+            f"{_AIVM_RELAY}?token={urllib.parse.quote(relay_token)}",
+            on_message=_on_message,
+            on_open=_on_open,
+            on_error=_on_error,
+        )
+        ws_thread = threading.Thread(target=ws.run_forever, daemon=True)
+        ws_thread.start()
+        ws_ready.wait(timeout=15)
+        if ws_err[0]:
+            raise RuntimeError(f"WebSocket failed: {ws_err[0]}")
+        print("  [AIVM] relay connected")
+
+        # 9. Encrypt prompt + upload blob
+        cipher = _aivm_aes_encrypt(session_key, prompt.encode("utf-8"))
+        r = req.post(
+            f"{_AIVM_GATEWAY}/api/blobs",
+            json={"data": base64.b64encode(cipher).decode()},
+            headers=self._auth_headers(), timeout=15,
+        )
+        r.raise_for_status()
+        blob_hashes = r.json().get("blobHashes", [])
+        if not blob_hashes:
+            raise RuntimeError("No blob hash returned from gateway")
+        _bh = blob_hashes[0]
+        prompt_hash = bytes.fromhex(_bh[2:].zfill(64) if _bh[:2].lower() == "0x" else _bh.zfill(64))
+
+        # 10. submitJob (pay 0.02 LCAI)
+        nonce_val2 = self._w3.eth.get_transaction_count(self._account.address)
+        tx2 = self._registry.functions.submitJob(
+            session_id,
+            prompt_hash,
+        ).build_transaction({
+            "from":     self._account.address,
+            "nonce":    nonce_val2,
+            "gas":      500_000,
+            "gasPrice": gas_price,
+            "value":    _AIVM_JOB_FEE,
+            "chainId":  _AIVM_CHAIN_ID,
+        })
+        signed2  = self._account.sign_transaction(tx2)
+        tx_hash2 = self._w3.eth.send_raw_transaction(signed2.raw_transaction)
+        print(f"  [AIVM] submitJob tx: {tx_hash2.hex()}")
+        receipt2 = self._w3.eth.wait_for_transaction_receipt(tx_hash2, timeout=90)
+        if receipt2.status != 1:
+            raise RuntimeError("submitJob reverted — check LCAI balance")
+
+        job_id = None
+        for log in receipt2.logs:
+            try:
+                evt = self._registry.events.JobSubmitted().process_log(log)
+                job_id = evt["args"]["jobId"]
+                break
+            except Exception:
+                pass
+        if job_id is None:
+            raise RuntimeError("JobSubmitted event not found in receipt")
+        print(f"  [AIVM] jobId: {job_id}")
+
+        # 11. Poll for JobCompleted
+        job_completed_topic = "0x" + Web3.keccak(
+            text="JobCompleted(uint256,address,bytes32,bytes32)"
+        ).hex()
+        job_id_topic = "0x" + hex(job_id)[2:].zfill(64)
+
+        done     = False
+        deadline = time.time() + timeout_secs
+        while time.time() < deadline and not done:
+            time.sleep(5)
+            try:
+                head = self._w3.eth.block_number
+                logs = self._w3.eth.get_logs({
+                    "address":   Web3.to_checksum_address(_AIVM_JOB_REG),
+                    "fromBlock": receipt2.blockNumber,
+                    "toBlock":   head,
+                    "topics":    [job_completed_topic, job_id_topic],
+                })
+                if logs:
+                    done = True
+                    print(f"  [AIVM] JobCompleted! worker: {logs[0].get('address')}")
+            except Exception as e:
+                print(f"  [AIVM] log poll error (retrying): {e}")
+
+        time.sleep(4)
+        ws.close()
+
+        result = "".join(chunks)
+        if result:
+            print(f"  [AIVM] inference done (relay data), {len(result)} chars")
+            return result
+
+        if not done:
+            raise RuntimeError(f"Timeout after {timeout_secs}s waiting for JobCompleted")
+
+        print(f"  [AIVM] inference done, {len(result)} chars received")
+        return result
+
+
+_aivm_relay_client = None
+_aivm_relay_lock   = threading.Lock()
+
+
+def _get_relay_aivm_client():
+    """Return AIVMClient singleton using RELAY_PRIVATE_KEY, or None if not configured."""
+    global _aivm_relay_client
+    pk = RELAY_PRIVATE_KEY.strip()
+    if not pk:
+        return None
+    with _aivm_relay_lock:
+        if _aivm_relay_client is None:
+            try:
+                _aivm_relay_client = AIVMClient(pk)
+            except Exception as e:
+                print(f"  [AIVM] Failed to init relay client: {e}")
+                return None
+    return _aivm_relay_client
+
+
 # ─── AI Description Generator ─────────────────────────────────────────────────
 
-def call_anthropic(prompt):
-    """Call Anthropic Claude API to generate a short description."""
-    if not ANTHROPIC_API_KEY:
-        raise ValueError("ANTHROPIC_API_KEY not configured on server")
-    payload = json.dumps({
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 150,
-        "messages": [{"role": "user", "content": prompt}]
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=payload,
-        headers={
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json"
-        },
-        method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-        return result["content"][0]["text"].strip()
+def call_aivm_describe(prompt):
+    """Call Lightchain AIVM to generate a short description."""
+    client = _get_relay_aivm_client()
+    if not client:
+        raise ValueError("RELAY_PRIVATE_KEY not configured — AIVM unavailable")
+    return client.run_inference(prompt)
 
 
 @app.route('/api/describe-upload', methods=['POST'])
@@ -1916,7 +2317,7 @@ def describe_upload():
             f" Keep it under 100 words. Return only the description, no quotes or extra text."
         )
     try:
-        description = call_anthropic(prompt)
+        description = call_aivm_describe(prompt)
         return jsonify({'description': description})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
