@@ -68,6 +68,7 @@ LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
 LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
+ANTHROPIC_API_KEY        = os.environ.get("ANTHROPIC_API_KEY", "")
 GITHUB_THUMB_REPO        = "Keiko-Dev-LCAI/lighttube"
 GITHUB_THUMB_BRANCH      = "main"
 CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
@@ -1866,6 +1867,61 @@ def lighttunes_thumbnail(filename):
     return '', 404
 
 # ─── end LightTunes ───────────────────────────────────────────────────────────
+
+# ─── AI Description Generator ─────────────────────────────────────────────────
+
+def call_anthropic(prompt):
+    """Call Anthropic Claude API to generate a short description."""
+    if not ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY not configured on server")
+    payload = json.dumps({
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 150,
+        "messages": [{"role": "user", "content": prompt}]
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+        return result["content"][0]["text"].strip()
+
+
+@app.route('/api/describe-upload', methods=['POST'])
+def describe_upload():
+    """Generate a 2-sentence AI description for a video or audio upload."""
+    data = request.get_json() or {}
+    title = data.get('title', '').strip()
+    category = data.get('category', '')
+    media_type = data.get('type', 'video')
+    if not title:
+        return jsonify({'error': 'Title is required'}), 400
+    if media_type == 'audio':
+        prompt = (
+            f"Write a 2-sentence description for a song called '{title}'"
+            f" in the {category} genre. Be descriptive and engaging."
+            f" Keep it under 100 words. Return only the description, no quotes or extra text."
+        )
+    else:
+        prompt = (
+            f"Write a 2-sentence description for a video called '{title}'"
+            f" in the {category} category. Be descriptive and engaging."
+            f" Keep it under 100 words. Return only the description, no quotes or extra text."
+        )
+    try:
+        description = call_anthropic(prompt)
+        return jsonify({'description': description})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ─── end AI Description Generator ─────────────────────────────────────────────
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8190))
