@@ -34,7 +34,7 @@ Optional:
   PAID_WALLETS_FILE        = path to persistent JSON file (default: /data/paid_wallets.json)
 """
 
-import os, json, time, uuid, base64, threading, urllib.request, urllib.parse, concurrent.futures, queue, secrets
+import os, json, time, uuid, base64, threading, urllib.request, urllib.parse, concurrent.futures, queue, secrets, tempfile
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from web3 import Web3
@@ -524,6 +524,252 @@ def lighttube_upload():
                          daemon=True)
     t.start()
     return jsonify({'jobId': job_id})
+
+
+@app.route('/api/lighttube/upload-init', methods=['POST'])
+def lighttube_upload_init():
+    """
+    Initialize a chunked upload session (for large files that would timeout as a single POST).
+    JSON body: {wallet, signature, timestamp, title, description, category, totalPieces, fileName, thumbnail}
+    Returns: {jobId}
+    """
+    if LIGHTTUBE_MAINTENANCE:
+        return jsonify({'error': 'LightTube is temporarily offline for maintenance. Please check back soon.'}), 503
+
+    data         = request.get_json(force=True) or {}
+    wallet       = (data.get('wallet', '') or '').strip().lower()
+    signature    = (data.get('signature', '') or '').strip()
+    title        = (data.get('title', '') or '').strip()
+    description  = (data.get('description', '') or '').strip()
+    category     = (data.get('category', 'Other') or 'Other').strip()
+    timestamp    = (data.get('timestamp', '') or '').strip()
+    total_pieces = int(data.get('totalPieces', 0))
+    file_name    = (data.get('fileName', 'video.mp4') or 'video.mp4').strip()
+    thumbnail    = (data.get('thumbnail', '') or '').strip() or None
+
+    if not wallet or not signature or not title or not total_pieces:
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    # Permanent wallet ban check — same as existing upload endpoint
+    if wallet in BANNED_WALLETS or wallet in get_banned_wallets_gh():
+        return jsonify({'error': 'This wallet has been banned from LightTube.'}), 403
+
+    # Verify wallet signature — same message format as existing upload endpoint
+    message = f"Upload to LightTube\nTitle: {title}\nWallet: {wallet}\nTimestamp: {timestamp}"
+    try:
+        msg       = encode_defunct(text=message)
+        recovered = Account.recover_message(msg, signature=signature).lower()
+        if recovered != wallet:
+            return jsonify({'error': 'Signature does not match wallet'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature error: {e}'}), 401
+
+    # Create a temp file to receive the incoming pieces
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.tmp')
+    tmp.close()
+
+    job_id = str(uuid.uuid4())
+    lt_upload_jobs[job_id] = {
+        'status':          'receiving',
+        'progress':        0,
+        'total':           0,
+        'videoId':         None,
+        'error':           None,
+        'pieces_received': 0,
+        'total_pieces':    total_pieces,
+        'tmp_path':        tmp.name,
+        'wallet':          wallet,
+        'title':           title,
+        'description':     description,
+        'category':        category,
+        'file_name':       file_name,
+        'thumbnail':       thumbnail,
+    }
+    return jsonify({'jobId': job_id})
+
+
+@app.route('/api/lighttube/upload-piece', methods=['POST'])
+def lighttube_upload_piece():
+    """
+    Append one binary piece to a chunked upload session.
+    Form fields: jobId (string), pieceIndex (int), piece (file/blob)
+    Returns: {ok: true, piecesReceived: N}
+    """
+    job_id     = request.form.get('jobId', '').strip()
+    piece_file = request.files.get('piece')
+
+    if not job_id or not piece_file:
+        return jsonify({'error': 'Missing jobId or piece'}), 400
+
+    job = lt_upload_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    if job['status'] != 'receiving':
+        return jsonify({'error': 'Job not in receiving state'}), 400
+
+    # Append piece to the temp file
+    with open(job['tmp_path'], 'ab') as f:
+        f.write(piece_file.read())
+
+    job['pieces_received'] += 1
+
+    # All pieces received — kick off background processing
+    if job['pieces_received'] >= job['total_pieces']:
+        job['status'] = 'initializing'
+        t = threading.Thread(target=_process_chunked_upload, args=(job_id,), daemon=True)
+        t.start()
+
+    return jsonify({'ok': True, 'piecesReceived': job['pieces_received']})
+
+
+def _process_chunked_upload(job_id):
+    """
+    Background thread: base64-encode the assembled temp file and submit it to the
+    blockchain exactly the same way _do_lt_upload() does — same contract calls,
+    same adaptive parallel batching, same thumbnail handling.
+    """
+    job      = lt_upload_jobs[job_id]
+    tmp_path = job['tmp_path']
+    try:
+        # Read the fully assembled file from disk
+        with open(tmp_path, 'rb') as f:
+            raw = f.read()
+
+        # Detect MIME type from filename extension
+        fn = job.get('file_name', 'video.mp4').lower()
+        if fn.endswith('.mp4'):
+            mime = 'video/mp4'
+        elif fn.endswith('.mov'):
+            mime = 'video/quicktime'
+        elif fn.endswith('.webm'):
+            mime = 'video/webm'
+        elif fn.endswith('.gif'):
+            mime = 'image/gif'
+        else:
+            mime = 'video/mp4'
+
+        data_uri = 'data:' + mime + ';base64,' + base64.b64encode(raw).decode('ascii')
+        del raw  # release the raw bytes ASAP
+
+        active_address = LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS
+        if not active_address:
+            raise Exception("No LightTube contract address configured (set LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS)")
+
+        w3_local   = Web3(Web3.HTTPProvider(RPC_URL))
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        contract   = w3_local.eth.contract(
+            address=Web3.to_checksum_address(active_address),
+            abi=LIGHTTUBE_V2_ABI  # relay ABI is identical for V2 and V3
+        )
+
+        chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
+        job['total']  = len(chunks)
+        job['status'] = 'initializing'
+
+        # ── initVideoFor ──────────────────────────────────────────────────────
+        user_wallet = job['wallet']
+        title       = job['title']
+        description = job['description']
+        category    = job['category']
+
+        nonce = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
+        tx = contract.functions.initVideoFor(
+            Web3.to_checksum_address(user_wallet), title, description, category, len(chunks)
+        ).build_transaction({
+            'from':     relay_acct.address,
+            'nonce':    nonce,
+            'gas':      300_000,
+            'gasPrice': w3_local.eth.gas_price,
+            'chainId':  CHAIN_ID,
+        })
+        signed  = w3_local.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
+        tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = w3_local.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+
+        # Parse videoId from VideoCreated event
+        ct_with_events = w3_local.eth.contract(
+            address=Web3.to_checksum_address(active_address),
+            abi=LIGHTTUBE_V2_ABI
+        )
+        logs     = ct_with_events.events.VideoCreated().process_receipt(receipt)
+        video_id = int(logs[0]['args']['videoId'])
+        job['videoId'] = video_id
+        job['status']  = 'uploading'
+        nonce += 1
+
+        # Save thumbnail immediately after we have the videoId (non-fatal if it fails)
+        thumbnail_b64 = job.get('thumbnail')
+        if thumbnail_b64:
+            try:
+                prefix   = "v3" if LIGHTTUBE_V3_ADDRESS else "v2"
+                filename = f"{prefix}_{video_id}.jpg"
+                if GITHUB_TOKEN:
+                    save_thumbnail_github(filename, thumbnail_b64)
+                else:
+                    os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
+                    thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, filename)
+                    thumb_data = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
+                    with open(thumb_path, 'wb') as tf:
+                        tf.write(base64.b64decode(thumb_data))
+            except Exception as te:
+                print(f"Thumbnail save failed (non-fatal): {te}")
+
+        # ── addVideoChunkFor × N (adaptive parallel batches) — identical to _do_lt_upload ──
+        _MAX_BATCH = 25
+        _MIN_BATCH = 8
+        batch_size = max(CHUNK_BATCH_SIZE, 15)
+        chunk_idx  = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
+            while chunk_idx < len(chunks):
+                batch          = chunks[chunk_idx : chunk_idx + batch_size]
+                gas_price      = int(w3_local.eth.gas_price * 1.2)
+                future_map     = {}
+                had_real_error = False
+
+                for j, chunk in enumerate(batch):
+                    ci = chunk_idx + j
+                    cn = nonce + j
+                    f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunk, cn, gas_price, active_address)
+                    future_map[f] = (ci, cn, chunk)
+
+                for f in concurrent.futures.as_completed(future_map):
+                    ci, cn, chunk = future_map[f]
+                    try:
+                        f.result()
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if 'nonce too low' in err_str or 'already known' in err_str:
+                            pass  # tx was already mined — treat as success
+                        else:
+                            had_real_error = True
+                            _send_one_chunk_tx(video_id, ci, chunk, cn, int(w3_local.eth.gas_price * 1.2), active_address)
+                    job['progress'] += 1
+
+                nonce     += len(batch)
+                chunk_idx += len(batch)
+
+                if had_real_error:
+                    batch_size = max(batch_size - 5, _MIN_BATCH)
+                    print(f"[chunked-upload] batch error — backing off to {batch_size} chunks/batch")
+                else:
+                    batch_size = min(batch_size + 3, _MAX_BATCH)
+                    print(f"[chunked-upload] clean batch — stepping up to {batch_size} chunks/batch")
+
+        job['status'] = 'complete'
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    except Exception as e:
+        job['status'] = 'error'
+        job['error']  = str(e)
+        print(f"Chunked LightTube upload error [{job_id}]: {e}")
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 @app.route('/api/lighttube/upload-progress/<job_id>', methods=['GET'])
