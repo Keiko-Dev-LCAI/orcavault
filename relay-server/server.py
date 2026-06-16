@@ -484,17 +484,9 @@ def _flush_stuck_relay_nonces(w3, relay_acct, max_cancel=400, repair_video_id=No
         if contract_address and _pending_tx_is_valid_chunk(
             w3, relay_acct, contract_address, pending_tx, repair_video_id
         ):
-            print(f"[relay] nonce {nonce}: valid repair chunk pending — waiting to mine")
-            try:
-                _wait_tx_receipt(w3, pending_tx['hash'], timeout=900)
-                waited += 1
-                confirmed = w3.eth.get_transaction_count(relay_acct.address, 'latest')
-                pending   = w3.eth.get_transaction_count(relay_acct.address, 'pending')
-                if nonce >= pending:
-                    break
-                continue
-            except Exception as err:
-                print(f"[relay] nonce {nonce}: valid chunk did not mine in time: {err}")
+            # Pending chunk txs often never mine on this chain (stuck mempool).
+            # Cancel and let repair resubmit sequentially — don't block 15 min each.
+            print(f"[relay] nonce {nonce}: valid chunk stuck in mempool — cancelling to resubmit")
         try:
             tx = {
                 'to':       relay_acct.address,
@@ -1411,7 +1403,7 @@ def health():
         'lighttube_v3':        LIGHTTUBE_V3_ADDRESS or None,
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
-        'lighttube_repair_fix': 'cache-retry-resume',
+        'lighttube_repair_fix': 'fast-flush-no-wait',
         'chain_id':            CHAIN_ID,
     })
 
