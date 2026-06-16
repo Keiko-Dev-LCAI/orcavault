@@ -84,6 +84,9 @@ CHUNK_BATCH_SIZE         = int(os.environ.get("CHUNK_BATCH_SIZE", "10"))  # para
 # Global nonce lock — ensures only one relay job claims the relay wallet's nonce at a time.
 # Prevents concurrent jobs from grabbing the same nonce and silently dropping chunks.
 _nonce_lock = threading.Lock()
+# Only one LightTube blockchain job (upload or repair) at a time on the relay wallet.
+_relay_job_lock = threading.Lock()
+_ACTIVE_LT_JOB_STATUSES = frozenset({'receiving', 'initializing', 'repairing', 'uploading', 'pending'})
 
 # LightTubeV2 ABI (relay functions only)
 LIGHTTUBE_V2_ABI = [
@@ -385,6 +388,77 @@ def _data_uri_chunk_at(ci, prefix, b64_path, b64_len):
         return prefix[start:] + f.read(end - len(prefix))
 
 
+def _active_lt_job():
+    """Return an in-flight LightTube upload/repair job, if any."""
+    for job in lt_upload_jobs.values():
+        if job.get('status') in _ACTIVE_LT_JOB_STATUSES:
+            return job
+    return None
+
+
+def _get_video_total_chunks_on_chain(w3, contract_address, video_id):
+    """Read totalChunks from the VideoCreated event for a video."""
+    addr        = Web3.to_checksum_address(contract_address)
+    event_topic = '0x' + w3.keccak(text='VideoCreated(uint256,address,string,string,string,uint256,uint256)').hex()
+    video_topic = '0x' + hex(video_id)[2:].zfill(64)
+    logs = w3.eth.get_logs({
+        'fromBlock': 0,
+        'toBlock':   'latest',
+        'address':   addr,
+        'topics':    [event_topic, video_topic],
+    })
+    if not logs:
+        raise Exception(f'Video {video_id} not found on-chain')
+    data = logs[0]['data']
+    if isinstance(data, str):
+        data = bytes.fromhex(data[2:])
+    from eth_abi import decode as abi_decode
+    _title, _desc, _cat, total_chunks, _ts = abi_decode(
+        ['string', 'string', 'string', 'uint256', 'uint256'], data
+    )
+    return int(total_chunks)
+
+
+def _flush_stuck_relay_nonces(w3, relay_acct, max_cancel=400):
+    """
+    Replace stuck pending relay-wallet txs with 0-value self-transfers so new
+    chunk submissions can mine. Needed when a bad repair (wrong video ID, etc.)
+    fills the mempool with reverting transactions.
+    """
+    confirmed = w3.eth.get_transaction_count(relay_acct.address, 'latest')
+    pending   = w3.eth.get_transaction_count(relay_acct.address, 'pending')
+    stuck     = pending - confirmed
+    if stuck <= 0:
+        return 0
+    print(f"[relay] flushing {stuck} stuck mempool nonce(s) from {confirmed}…")
+    cleared = 0
+    gas_price = int(w3.eth.gas_price * 10)
+    for nonce in range(confirmed, min(pending, confirmed + max_cancel)):
+        try:
+            tx = {
+                'to':       relay_acct.address,
+                'value':    0,
+                'nonce':    nonce,
+                'gas':      21_000,
+                'gasPrice': gas_price,
+                'chainId':  CHAIN_ID,
+            }
+            signed  = relay_acct.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            if receipt.get('status') == 1:
+                cleared += 1
+        except Exception as err:
+            err_str = str(err).lower()
+            if 'nonce too low' in err_str or 'already known' in err_str:
+                cleared += 1
+                continue
+            print(f"[relay] flush nonce {nonce} failed: {err}")
+            break
+    print(f"[relay] flushed {cleared} stuck nonce(s)")
+    return cleared
+
+
 def _scan_video_chunk_indices(w3, contract_address, video_id):
     """
     Return the set of chunk indices already stored on-chain for a video.
@@ -667,6 +741,12 @@ def lighttube_upload_init():
             return jsonify({'error': 'Unauthorized'}), 401
         if not total_pieces:
             return jsonify({'error': 'totalPieces required'}), 400
+        active = _active_lt_job()
+        if active:
+            return jsonify({
+                'error': 'Another upload/repair is already running on the relay. '
+                         'Wait for it to finish, or hard-refresh and retry in a few minutes.'
+            }), 409
     else:
         # Normal upload mode — validate wallet, title, and signature
         if not wallet or not signature or not title or not total_pieces:
@@ -791,9 +871,15 @@ def _process_chunked_upload(job_id):
             def _chunk_at(ci):
                 return _data_uri_chunk_at(ci, prefix, b64_path, b64_len)
 
-            print(f"[repair] video {repair_video_id}: found {len(present_set)}/{num_chunks} chunks on-chain after adaptive scan")
+            chain_total = _get_video_total_chunks_on_chain(w3_local, active_address, repair_video_id)
+            print(f"[repair] video {repair_video_id}: found {len(present_set)}/{num_chunks} chunks on-chain after adaptive scan (chain totalChunks={chain_total})")
+            if num_chunks != chain_total:
+                raise Exception(
+                    f'File produces {num_chunks} chunks but video {repair_video_id} expects '
+                    f'{chain_total} on-chain. Wrong file or wrong video ID?'
+                )
 
-            missing_indices = sorted(set(range(num_chunks)) - present_set)
+            missing_indices = sorted(i for i in (set(range(num_chunks)) - present_set) if i < chain_total)
             job['total']         = len(missing_indices)
             job['missing_count'] = len(missing_indices)
             job['present_count'] = num_chunks - len(missing_indices)
@@ -969,98 +1055,62 @@ def _do_repair_upload(job_id, video_id, chunk_source, missing_indices, active_ad
     """
     job = lt_upload_jobs[job_id]
     try:
-        job['status'] = 'uploading'
-        job['phase']  = 'uploading'
-        job['repaired'] = 0
-        job['failed']   = 0
-        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        with _relay_job_lock:
+            job['status']   = 'uploading'
+            job['phase']    = 'uploading'
+            job['repaired'] = 0
+            job['failed']   = 0
+            relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+            w3_local   = Web3(Web3.HTTPProvider(RPC_URL))
+            contract   = w3_local.eth.contract(
+                address=Web3.to_checksum_address(active_address),
+                abi=LIGHTTUBE_V2_ABI,
+            )
+            chain_total = _get_video_total_chunks_on_chain(w3_local, active_address, video_id)
 
-        def _get_chunk(ci):
-            if callable(chunk_source):
-                return chunk_source(ci)
-            return chunk_source[ci]
+            job['phase'] = 'flushing'
+            flushed = _flush_stuck_relay_nonces(w3_local, relay_acct)
+            if flushed:
+                print(f"[repair] job {job_id}: cleared {flushed} stuck relay nonce(s) before upload")
+            job['phase'] = 'uploading'
 
-        _MAX_BATCH = 25
-        _MIN_BATCH = 8
-        batch_size = max(CHUNK_BATCH_SIZE, 15)
-        idx = 0  # index into missing_indices
+            def _get_chunk(ci):
+                if callable(chunk_source):
+                    return chunk_source(ci)
+                return chunk_source[ci]
 
-        def _try_chunk(ci, cn, chunk):
-            try:
-                _send_one_chunk_tx(video_id, ci, chunk, cn, int(w3.eth.gas_price * 1.2), active_address)
-                return True
-            except Exception as e:
-                err_str = str(e).lower()
-                if 'nonce too low' in err_str or 'already known' in err_str:
-                    print(f"[WARNING] repair chunk {ci} got 'nonce too low' — treating as done.")
-                    return True
-                if 'insufficient funds' in err_str:
+            for ci in missing_indices:
+                if ci >= chain_total:
                     raise Exception(
-                        f'Relay wallet out of LCAI at chunk {ci}. '
-                        f'Fund {relay_acct.address} and re-run repair to resume.'
-                    ) from e
-                print(f"[repair] chunk {ci} failed: {e}")
-                return False
+                        f'Chunk {ci} is out of range for video {video_id} (totalChunks={chain_total}). '
+                        f'Wrong video ID?'
+                    )
+                chunk_data = _get_chunk(ci)
+                try:
+                    contract.functions.addVideoChunkFor(video_id, ci, chunk_data).call(
+                        {'from': relay_acct.address}
+                    )
+                except Exception as sim_err:
+                    raise Exception(
+                        f'Chunk {ci} would revert on-chain for video {video_id}: {sim_err}'
+                    ) from sim_err
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
-            while idx < len(missing_indices):
-                batch_ci = missing_indices[idx : idx + batch_size]  # chunk indices to send
-
-                # Grab nonce while holding the lock, fire all txs, then release
                 with _nonce_lock:
-                    nonce     = w3.eth.get_transaction_count(relay_acct.address, 'pending')
-                    gas_price = int(w3.eth.gas_price * 1.2)
-                    future_map = {}
-                    for j, ci in enumerate(batch_ci):
-                        cn = nonce + j
-                        chunk_data = _get_chunk(ci)
-                        f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunk_data, cn, gas_price, active_address)
-                        future_map[f] = (ci, cn, chunk_data)
+                    nonce     = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
+                    gas_price = int(w3_local.eth.gas_price * 2)
+                    receipt   = _send_one_chunk_tx(
+                        video_id, ci, chunk_data, nonce, gas_price, active_address
+                    )
+                if receipt.get('status') != 1:
+                    job['failed'] = job.get('failed', 0) + 1
+                    raise Exception(f'Chunk {ci} transaction reverted on-chain')
+                job['repaired'] = job.get('repaired', 0) + 1
+                job['progress'] = job.get('progress', 0) + 1
+                if job['progress'] % 25 == 0:
+                    print(f"[repair] job {job_id}: {job['progress']}/{len(missing_indices)} chunks stored for video {video_id}")
 
-                had_real_error = False
-                for f in concurrent.futures.as_completed(future_map):
-                    ci, cn, chunk = future_map[f]
-                    try:
-                        f.result()
-                        job['repaired'] = job.get('repaired', 0) + 1
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        if 'insufficient funds' in err_str:
-                            raise Exception(
-                                f'Relay wallet out of LCAI at chunk {ci}. '
-                                f'Fund {relay_acct.address} and re-run repair to resume.'
-                            ) from e
-                        if 'nonce too low' in err_str or 'already known' in err_str:
-                            print(f"[WARNING] repair chunk {ci} got 'nonce too low' — treating as done.")
-                            job['repaired'] = job.get('repaired', 0) + 1
-                        else:
-                            had_real_error = True
-                            if _try_chunk(ci, cn, chunk):
-                                job['repaired'] = job.get('repaired', 0) + 1
-                            else:
-                                job['failed'] = job.get('failed', 0) + 1
-                    job['progress'] += 1
-
-                idx += len(batch_ci)
-
-                if had_real_error:
-                    batch_size = max(batch_size - 5, _MIN_BATCH)
-                    print(f"[repair] batch error — backing off to {batch_size} chunks/batch")
-                else:
-                    batch_size = min(batch_size + 3, _MAX_BATCH)
-                    print(f"[repair] clean batch — stepping up to {batch_size} chunks/batch")
-
-        repaired = job.get('repaired', 0)
-        failed   = job.get('failed', 0)
-        if failed > 0 and repaired == 0:
-            raise Exception(f'Repair failed — 0 of {len(missing_indices)} chunks were stored on-chain.')
-        if failed > 0:
-            job['status'] = 'error'
-            job['error']  = f'Partial repair — {repaired} stored, {failed} failed. Re-run repair to continue.'
-            print(f"[repair] job {job_id} partial — {repaired} ok, {failed} failed for video {video_id}")
-            return
-        job['status'] = 'complete'
-        print(f"[repair] job {job_id} complete — repaired {repaired} chunks for video {video_id}")
+            job['status'] = 'complete'
+            print(f"[repair] job {job_id} complete — repaired {job['repaired']} chunks for video {video_id}")
     except Exception as e:
         job['status'] = 'error'
         job['error']  = str(e)
@@ -1238,7 +1288,7 @@ def health():
         'lighttube_v3':        LIGHTTUBE_V3_ADDRESS or None,
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
-        'lighttube_repair_fix': 'stream-b64-to-disk',
+        'lighttube_repair_fix': 'sequential-flush-simulate',
         'chain_id':            CHAIN_ID,
     })
 
