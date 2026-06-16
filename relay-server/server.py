@@ -345,6 +345,62 @@ def save_thumbnail_github(filename, data_b64):
 
 # ─── LightTube relay upload ───────────────────────────────────────────────────
 
+def _scan_video_chunk_indices(w3, contract_address, video_id):
+    """
+    Return the set of chunk indices already stored on-chain for a video.
+
+    Uses adaptive block-range pagination: walks the chain in 50k-block pages,
+    subdividing any page that fails or returns a dense burst of events (large
+    uploads cluster in a narrow block window and crash single get_logs calls).
+    """
+    addr           = Web3.to_checksum_address(contract_address)
+    event_topic    = '0x' + w3.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
+    video_id_topic = '0x' + hex(video_id)[2:].zfill(64)
+    latest_block   = w3.eth.block_number
+    present_set    = set()
+    MIN_SPAN       = 100    # smallest block window to attempt
+    DENSE_LIMIT    = 800    # subdivide if a page returns this many logs
+
+    def _scan_range(start, end, depth=0):
+        if start > end:
+            return
+        span = end - start + 1
+        try:
+            logs = w3.eth.get_logs({
+                'fromBlock': start,
+                'toBlock':   end,
+                'address':   addr,
+                'topics':    [event_topic, video_id_topic],
+            })
+            for log in logs:
+                present_set.add(int(log['topics'][2].hex(), 16))
+            if len(logs) >= DENSE_LIMIT and span > MIN_SPAN:
+                mid = start + span // 2
+                print(f"[repair] scan blocks {start}-{end}: {len(logs)} logs — subdividing at {mid}")
+                _scan_range(start, mid, depth + 1)
+                _scan_range(mid + 1, end, depth + 1)
+        except Exception as err:
+            if span <= MIN_SPAN:
+                print(f"[repair] scan blocks {start}-{end} failed at min span: {err}")
+                return
+            mid = start + span // 2
+            print(f"[repair] scan blocks {start}-{end} failed ({err}) — splitting at {mid}")
+            _scan_range(start, mid, depth + 1)
+            _scan_range(mid + 1, end, depth + 1)
+
+    SCAN_STEP = 50_000
+    total_pages = (latest_block // SCAN_STEP) + 1
+    page_num = 0
+    print(f"[repair] video {video_id}: adaptive scan 0-{latest_block:,} ({total_pages} top-level pages)")
+    for start in range(0, latest_block + 1, SCAN_STEP):
+        end = min(start + SCAN_STEP - 1, latest_block)
+        page_num += 1
+        _scan_range(start, end)
+        if page_num % 5 == 0 or end >= latest_block:
+            print(f"[repair] scan page {page_num}/{total_pages} done — {len(present_set)} unique chunks so far")
+    return present_set
+
+
 def _send_one_chunk_tx(video_id, chunk_index, chunk_data, nonce, gas_price, contract_address):
     """Send a single addVideoChunkFor transaction. Borrows a pooled Web3 connection."""
     w3t = _borrow_w3()
@@ -697,35 +753,8 @@ def _process_chunked_upload(job_id):
         if repair_video_id is not None:
             job['status'] = 'repairing'
             try:
-                event_topic    = '0x' + w3_local.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
-                video_id_topic = '0x' + hex(repair_video_id)[2:].zfill(64)
-                # Paginate through ALL blocks in 50k-block steps.
-                # A single fromBlock=0,toBlock='latest' call hits the RPC result-count
-                # limit (~1000 events) and returns an incomplete picture.
-                latest_block = w3_local.eth.block_number
-                SCAN_STEP    = 50_000
-                present_set  = set()
-                page_num     = 0
-                total_pages  = (latest_block // SCAN_STEP) + 1
-                print(f"[repair] video {repair_video_id}: scanning {latest_block:,} blocks in {total_pages} pages…")
-                for start in range(0, latest_block + 1, SCAN_STEP):
-                    end = min(start + SCAN_STEP - 1, latest_block)
-                    page_num += 1
-                    try:
-                        page_logs = w3_local.eth.get_logs({
-                            'fromBlock': start,
-                            'toBlock':   end,
-                            'address':   Web3.to_checksum_address(active_address),
-                            'topics':    [event_topic, video_id_topic],
-                        })
-                        for log in page_logs:
-                            chunk_index = int(log['topics'][2].hex(), 16)
-                            present_set.add(chunk_index)
-                    except Exception as page_err:
-                        print(f"[repair] scan page {page_num}/{total_pages} blocks {start}-{end} failed: {page_err} — skipping")
-                    if page_num % 20 == 0 or page_num == total_pages:
-                        print(f"[repair] scan {page_num}/{total_pages} pages done, {len(present_set)} unique chunks found so far")
-                print(f"[repair] video {repair_video_id}: found {len(present_set)}/{len(chunks)} chunks on-chain after full paginated scan")
+                present_set = _scan_video_chunk_indices(w3_local, active_address, repair_video_id)
+                print(f"[repair] video {repair_video_id}: found {len(present_set)}/{len(chunks)} chunks on-chain after adaptive scan")
             except Exception as e:
                 raise Exception(f'Failed to query blockchain events: {e}')
 
