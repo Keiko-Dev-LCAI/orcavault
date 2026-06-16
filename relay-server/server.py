@@ -34,7 +34,7 @@ Optional:
   PAID_WALLETS_FILE        = path to persistent JSON file (default: /data/paid_wallets.json)
 """
 
-import os, json, time, uuid, base64, threading, urllib.request, urllib.parse, concurrent.futures, queue, secrets, tempfile
+import os, json, time, uuid, base64, threading, urllib.request, urllib.parse, concurrent.futures, queue, secrets, tempfile, shutil
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from web3 import Web3
@@ -67,6 +67,7 @@ ORCAVAULT_HIDDEN_SEED    = {s.strip() for s in os.environ.get("ORCAVAULT_HIDDEN_
 LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
 LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
+LIGHTTUBE_REPAIR_CACHE_DIR = os.environ.get("LIGHTTUBE_REPAIR_CACHE_DIR", "/data/lt_repair_cache")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
 # ── AIVM (Lightchain decentralized inference) ────────────────────────────────
 _AIVM_GATEWAY  = "https://chat-api.mainnet.lightchain.ai"
@@ -386,6 +387,11 @@ def _data_uri_chunk_at(ci, prefix, b64_path, b64_len):
             return f.read(end - start)
     with open(b64_path, 'r', encoding='ascii') as f:
         return prefix[start:] + f.read(end - len(prefix))
+
+
+def _repair_cache_path(video_id, file_size):
+    os.makedirs(LIGHTTUBE_REPAIR_CACHE_DIR, exist_ok=True)
+    return os.path.join(LIGHTTUBE_REPAIR_CACHE_DIR, f'v3_{video_id}_{file_size}.tmp')
 
 
 def _active_lt_job():
@@ -837,11 +843,40 @@ def lighttube_upload_init():
         except Exception as e:
             return jsonify({'error': f'Signature error: {e}'}), 401
 
+    file_size = int(form.get('fileSize', data.get('fileSize', 0)) or 0)
+    job_id    = str(uuid.uuid4())
+
+    # Repair cache hit — skip 2 GB re-upload when Railway restarts mid-repair.
+    if repair_video_id is not None and file_size > 0:
+        cache_path = _repair_cache_path(repair_video_id, file_size)
+        if os.path.isfile(cache_path) and os.path.getsize(cache_path) == file_size:
+            lt_upload_jobs[job_id] = {
+                'status':          'initializing',
+                'progress':        0,
+                'total':           0,
+                'videoId':         None,
+                'error':           None,
+                'pieces_received': total_pieces,
+                'total_pieces':    total_pieces,
+                'tmp_path':        cache_path,
+                'wallet':          wallet,
+                'title':           title,
+                'description':     description,
+                'category':        category,
+                'file_name':       file_name,
+                'thumbnail':       thumbnail,
+                'repair_video_id': repair_video_id,
+                'from_cache':      True,
+            }
+            t = threading.Thread(target=_process_chunked_upload, args=(job_id,), daemon=True)
+            t.start()
+            print(f"[repair] job {job_id}: using cached file for video {repair_video_id} ({file_size} bytes)")
+            return jsonify({'jobId': job_id, 'cached': True})
+
     # Create a temp file to receive the incoming pieces
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.tmp')
     tmp.close()
 
-    job_id = str(uuid.uuid4())
     lt_upload_jobs[job_id] = {
         'status':          'receiving',
         'progress':        0,
@@ -858,6 +893,7 @@ def lighttube_upload_init():
         'file_name':       file_name,
         'thumbnail':       thumbnail,
         'repair_video_id': repair_video_id,
+        'file_size':       file_size,
     }
     return jsonify({'jobId': job_id})
 
@@ -888,8 +924,17 @@ def lighttube_upload_piece():
 
     job['pieces_received'] += 1
 
-    # All pieces received — kick off background processing
+    # All pieces received — cache repair files, then kick off background processing
     if job['pieces_received'] >= job['total_pieces']:
+        repair_vid = job.get('repair_video_id')
+        if repair_vid is not None and not job.get('from_cache'):
+            try:
+                fsize     = os.path.getsize(job['tmp_path'])
+                cache_dst = _repair_cache_path(repair_vid, fsize)
+                shutil.copy2(job['tmp_path'], cache_dst)
+                print(f"[repair] cached video {repair_vid} file ({fsize} bytes) → {cache_dst}")
+            except Exception as err:
+                print(f"[repair] cache save failed: {err}")
         job['status'] = 'initializing'
         t = threading.Thread(target=_process_chunked_upload, args=(job_id,), daemon=True)
         t.start()
@@ -1366,7 +1411,7 @@ def health():
         'lighttube_v3':        LIGHTTUBE_V3_ADDRESS or None,
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
-        'lighttube_repair_fix': 'smart-flush-wait-valid',
+        'lighttube_repair_fix': 'cache-retry-resume',
         'chain_id':            CHAIN_ID,
     })
 
