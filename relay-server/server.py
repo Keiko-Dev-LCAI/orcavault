@@ -541,33 +541,54 @@ def lighttube_upload_init():
     if LIGHTTUBE_MAINTENANCE:
         return jsonify({'error': 'LightTube is temporarily offline for maintenance. Please check back soon.'}), 503
 
-    data         = request.get_json(force=True) or {}
-    wallet       = (data.get('wallet', '') or '').strip().lower()
-    signature    = (data.get('signature', '') or '').strip()
-    title        = (data.get('title', '') or '').strip()
-    description  = (data.get('description', '') or '').strip()
-    category     = (data.get('category', 'Other') or 'Other').strip()
-    timestamp    = (data.get('timestamp', '') or '').strip()
-    total_pieces = int(data.get('totalPieces', 0))
-    file_name    = (data.get('fileName', 'video.mp4') or 'video.mp4').strip()
-    thumbnail    = (data.get('thumbnail', '') or '').strip() or None
+    # Support both JSON body (normal upload) and multipart/form-data (repair mode)
+    data = request.get_json(force=True, silent=True) or {}
+    form = request.form
 
-    if not wallet or not signature or not title or not total_pieces:
-        return jsonify({'error': 'Missing required fields'}), 400
+    def _field(key, default=''):
+        """Read from form data first, fall back to JSON body."""
+        v = form.get(key) or data.get(key) or default
+        return (v if isinstance(v, str) else str(v or default)).strip()
 
-    # Permanent wallet ban check — same as existing upload endpoint
-    if wallet in BANNED_WALLETS or wallet in get_banned_wallets_gh():
-        return jsonify({'error': 'This wallet has been banned from LightTube.'}), 403
+    wallet       = _field('wallet').lower()
+    signature    = _field('signature')
+    title        = _field('title')
+    description  = _field('description')
+    category     = _field('category', 'Other') or 'Other'
+    timestamp    = _field('timestamp')
+    total_pieces = int(form.get('totalPieces', data.get('totalPieces', 0)) or 0)
+    file_name    = _field('fileName', 'video.mp4') or 'video.mp4'
+    thumbnail    = _field('thumbnail') or None
+    repair_video_id_str = _field('repairVideoId')
+    repair_video_id = int(repair_video_id_str) if repair_video_id_str else None
 
-    # Verify wallet signature — same message format as existing upload endpoint
-    message = f"Upload to LightTube\nTitle: {title}\nWallet: {wallet}\nTimestamp: {timestamp}"
-    try:
-        msg       = encode_defunct(text=message)
-        recovered = Account.recover_message(msg, signature=signature).lower()
-        if recovered != wallet:
-            return jsonify({'error': 'Signature does not match wallet'}), 401
-    except Exception as e:
-        return jsonify({'error': f'Signature error: {e}'}), 401
+    if repair_video_id is not None:
+        # Repair mode — admin-only; skip wallet/title/sig checks
+        if not LIGHTTUBE_ADMIN_KEY:
+            return jsonify({'error': 'Admin not configured on server'}), 500
+        admin_key = _field('adminKey')
+        if admin_key != LIGHTTUBE_ADMIN_KEY:
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not total_pieces:
+            return jsonify({'error': 'totalPieces required'}), 400
+    else:
+        # Normal upload mode — validate wallet, title, and signature
+        if not wallet or not signature or not title or not total_pieces:
+            return jsonify({'error': 'Missing required fields'}), 400
+
+        # Permanent wallet ban check — same as existing upload endpoint
+        if wallet in BANNED_WALLETS or wallet in get_banned_wallets_gh():
+            return jsonify({'error': 'This wallet has been banned from LightTube.'}), 403
+
+        # Verify wallet signature — same message format as existing upload endpoint
+        message = f"Upload to LightTube\nTitle: {title}\nWallet: {wallet}\nTimestamp: {timestamp}"
+        try:
+            msg       = encode_defunct(text=message)
+            recovered = Account.recover_message(msg, signature=signature).lower()
+            if recovered != wallet:
+                return jsonify({'error': 'Signature does not match wallet'}), 401
+        except Exception as e:
+            return jsonify({'error': f'Signature error: {e}'}), 401
 
     # Create a temp file to receive the incoming pieces
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.tmp')
@@ -589,6 +610,7 @@ def lighttube_upload_init():
         'category':        category,
         'file_name':       file_name,
         'thumbnail':       thumbnail,
+        'repair_video_id': repair_video_id,
     }
     return jsonify({'jobId': job_id})
 
@@ -669,6 +691,53 @@ def _process_chunked_upload(job_id):
         )
 
         chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
+
+        # ── REPAIR MODE ───────────────────────────────────────────────────────
+        repair_video_id = job.get('repair_video_id')
+        if repair_video_id is not None:
+            job['status'] = 'repairing'
+            try:
+                event_topic    = w3_local.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
+                video_id_topic = '0x' + hex(repair_video_id)[2:].zfill(64)
+                logs = w3_local.eth.get_logs({
+                    'fromBlock': 0,
+                    'toBlock':   'latest',
+                    'address':   Web3.to_checksum_address(active_address),
+                    'topics':    [event_topic, video_id_topic],
+                })
+                present_set = set()
+                for log in logs:
+                    chunk_index = int(log['topics'][2].hex(), 16)
+                    present_set.add(chunk_index)
+                print(f"[repair] video {repair_video_id}: found {len(present_set)}/{len(chunks)} chunks on-chain")
+            except Exception as e:
+                raise Exception(f'Failed to query blockchain events: {e}')
+
+            missing_indices = sorted(set(range(len(chunks))) - present_set)
+            job['total']         = len(missing_indices)
+            job['missing_count'] = len(missing_indices)
+            job['present_count'] = len(chunks) - len(missing_indices)
+            job['total_chunks']  = len(chunks)
+            job['videoId']       = repair_video_id
+
+            if not missing_indices:
+                job['status'] = 'complete'
+                print(f"[repair] job {job_id}: all {len(chunks)} chunks present — nothing to repair")
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+                return
+
+            print(f"[repair] job {job_id}: {len(missing_indices)} missing chunks for video {repair_video_id}")
+            _do_repair_upload(job_id, repair_video_id, chunks, missing_indices, active_address)
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            return
+
+        # ── NORMAL UPLOAD MODE ────────────────────────────────────────────────
         job['total']  = len(chunks)
         job['status'] = 'initializing'
 
@@ -841,123 +910,6 @@ def _do_repair_upload(job_id, video_id, chunks, missing_indices, active_address)
         job['error']  = str(e)
         print(f"Repair upload error [{job_id}]: {e}")
 
-
-@app.route('/api/lighttube/repair-video', methods=['POST'])
-def lighttube_repair_video():
-    """
-    Admin endpoint — find and re-submit missing blockchain chunks for a video.
-    Accepts multipart/form-data with fields: adminKey, videoId, file.
-    Queries VideoChunkStored events to find which chunks are already on-chain,
-    then submits only the missing ones using the relay wallet.
-    Returns: {jobId, status, missing, total, present}
-    """
-    if not LIGHTTUBE_ADMIN_KEY:
-        return jsonify({'error': 'Admin not configured on server'}), 500
-
-    admin_key = request.form.get('adminKey', '').strip()
-    if admin_key != LIGHTTUBE_ADMIN_KEY:
-        return jsonify({'error': 'Unauthorized'}), 401
-
-    video_id_str = request.form.get('videoId', '').strip()
-    if not video_id_str:
-        return jsonify({'error': 'videoId required'}), 400
-    try:
-        video_id = int(video_id_str)
-    except ValueError:
-        return jsonify({'error': 'videoId must be an integer'}), 400
-
-    video_file = request.files.get('file')
-    if not video_file:
-        return jsonify({'error': 'file required'}), 400
-
-    active_address = LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS
-    if not active_address:
-        return jsonify({'error': 'No LightTube contract address configured'}), 500
-    if not RELAY_PRIVATE_KEY:
-        return jsonify({'error': 'Relay key not configured'}), 500
-
-    # Read uploaded file and build data URI (same MIME detection as _process_chunked_upload)
-    raw = video_file.read()
-    fn  = (video_file.filename or 'video.mp4').lower()
-    if fn.endswith('.mp4'):
-        mime = 'video/mp4'
-    elif fn.endswith('.mov'):
-        mime = 'video/quicktime'
-    elif fn.endswith('.webm'):
-        mime = 'video/webm'
-    elif fn.endswith('.gif'):
-        mime = 'image/gif'
-    else:
-        mime = 'video/mp4'
-
-    data_uri = 'data:' + mime + ';base64,' + base64.b64encode(raw).decode('ascii')
-    del raw  # release raw bytes ASAP
-
-    chunks       = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
-    total_chunks = len(chunks)
-
-    # ── Query blockchain for already-stored chunk indices ──────────────────────
-    # VideoChunkStored(uint256 indexed videoId, uint256 indexed chunkIndex, uint256 totalChunks, string chunkData)
-    # Both videoId and chunkIndex are indexed (confirmed from CONTRACT_ABI in the frontend).
-    try:
-        event_topic    = w3.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
-        video_id_topic = '0x' + hex(video_id)[2:].zfill(64)
-        logs = w3.eth.get_logs({
-            'fromBlock': 0,
-            'toBlock':   'latest',
-            'address':   Web3.to_checksum_address(active_address),
-            'topics':    [event_topic, video_id_topic],
-        })
-        present_set = set()
-        for log in logs:
-            # chunkIndex is the second indexed param → topics[2]
-            chunk_index = int(log['topics'][2].hex(), 16)
-            present_set.add(chunk_index)
-        print(f"[repair] video {video_id}: found {len(present_set)}/{total_chunks} chunks on-chain")
-    except Exception as e:
-        return jsonify({'error': f'Failed to query blockchain events: {e}'}), 500
-
-    missing = [i for i in range(total_chunks) if i not in present_set]
-
-    if not missing:
-        return jsonify({
-            'status':  'ok',
-            'jobId':   None,
-            'missing': 0,
-            'total':   total_chunks,
-            'present': len(present_set),
-            'message': 'No chunks to repair — all chunks are already on-chain',
-        })
-
-    # Create job entry for progress tracking
-    job_id = str(uuid.uuid4())
-    lt_upload_jobs[job_id] = {
-        'status':        'pending',
-        'progress':      0,
-        'total':         len(missing),
-        'videoId':       video_id,
-        'error':         None,
-        'repair':        True,
-        'missing_count': len(missing),
-        'total_chunks':  total_chunks,
-        'present_count': len(present_set),
-    }
-
-    print(f"[repair] starting job {job_id} — {len(missing)} missing chunks for video {video_id}")
-    t = threading.Thread(
-        target=_do_repair_upload,
-        args=(job_id, video_id, chunks, missing, active_address),
-        daemon=True
-    )
-    t.start()
-
-    return jsonify({
-        'status':  'started',
-        'jobId':   job_id,
-        'missing': len(missing),
-        'total':   total_chunks,
-        'present': len(present_set),
-    })
 
 
 @app.route('/api/lighttube/upload-progress/<job_id>', methods=['GET'])
