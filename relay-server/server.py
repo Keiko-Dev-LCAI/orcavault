@@ -715,26 +715,6 @@ def _process_chunked_upload(job_id):
     job      = lt_upload_jobs[job_id]
     tmp_path = job['tmp_path']
     try:
-        # Read the fully assembled file from disk
-        with open(tmp_path, 'rb') as f:
-            raw = f.read()
-
-        # Detect MIME type from filename extension
-        fn = job.get('file_name', 'video.mp4').lower()
-        if fn.endswith('.mp4'):
-            mime = 'video/mp4'
-        elif fn.endswith('.mov'):
-            mime = 'video/quicktime'
-        elif fn.endswith('.webm'):
-            mime = 'video/webm'
-        elif fn.endswith('.gif'):
-            mime = 'image/gif'
-        else:
-            mime = 'video/mp4'
-
-        data_uri = 'data:' + mime + ';base64,' + base64.b64encode(raw).decode('ascii')
-        del raw  # release the raw bytes ASAP
-
         active_address = LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS
         if not active_address:
             raise Exception("No LightTube contract address configured (set LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS)")
@@ -746,28 +726,61 @@ def _process_chunked_upload(job_id):
             abi=LIGHTTUBE_V2_ABI  # relay ABI is identical for V2 and V3
         )
 
-        chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
-
-        # ── REPAIR MODE ───────────────────────────────────────────────────────
         repair_video_id = job.get('repair_video_id')
+
+        # ── REPAIR MODE: scan blockchain BEFORE loading 2 GB into RAM ────────
         if repair_video_id is not None:
             job['status'] = 'repairing'
+            job['phase']  = 'scanning'
+            print(f"[repair] job {job_id}: scanning blockchain before file encode…")
             try:
                 present_set = _scan_video_chunk_indices(w3_local, active_address, repair_video_id)
-                print(f"[repair] video {repair_video_id}: found {len(present_set)}/{len(chunks)} chunks on-chain after adaptive scan")
             except Exception as e:
                 raise Exception(f'Failed to query blockchain events: {e}')
 
-            missing_indices = sorted(set(range(len(chunks))) - present_set)
+            job['phase'] = 'encoding'
+            print(f"[repair] job {job_id}: reading and base64-encoding file…")
+            with open(tmp_path, 'rb') as f:
+                raw = f.read()
+            fn = job.get('file_name', 'video.mp4').lower()
+            if fn.endswith('.mp4'):
+                mime = 'video/mp4'
+            elif fn.endswith('.mov'):
+                mime = 'video/quicktime'
+            elif fn.endswith('.webm'):
+                mime = 'video/webm'
+            elif fn.endswith('.gif'):
+                mime = 'image/gif'
+            else:
+                mime = 'video/mp4'
+
+            prefix   = 'data:' + mime + ';base64,'
+            b64      = base64.b64encode(raw).decode('ascii')
+            del raw
+            data_uri_len = len(prefix) + len(b64)
+            num_chunks   = (data_uri_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+
+            def _chunk_at(ci):
+                start = ci * CHUNK_SIZE
+                end   = start + CHUNK_SIZE
+                if end <= len(prefix):
+                    return prefix[start:end]
+                if start >= len(prefix):
+                    return b64[start - len(prefix):end - len(prefix)]
+                return prefix[start:] + b64[:end - len(prefix)]
+
+            print(f"[repair] video {repair_video_id}: found {len(present_set)}/{num_chunks} chunks on-chain after adaptive scan")
+
+            missing_indices = sorted(set(range(num_chunks)) - present_set)
             job['total']         = len(missing_indices)
             job['missing_count'] = len(missing_indices)
-            job['present_count'] = len(chunks) - len(missing_indices)
-            job['total_chunks']  = len(chunks)
+            job['present_count'] = num_chunks - len(missing_indices)
+            job['total_chunks']  = num_chunks
             job['videoId']       = repair_video_id
 
             if not missing_indices:
                 job['status'] = 'complete'
-                print(f"[repair] job {job_id}: all {len(chunks)} chunks present — nothing to repair")
+                print(f"[repair] job {job_id}: all {num_chunks} chunks present — nothing to repair")
                 try:
                     os.unlink(tmp_path)
                 except Exception:
@@ -791,7 +804,9 @@ def _process_chunked_upload(job_id):
                     f'for {len(missing_indices)} chunks. Fund {relay_acct.address} with LCAI and retry.'
                 )
 
-            _do_repair_upload(job_id, repair_video_id, chunks, missing_indices, active_address)
+            job['phase'] = 'uploading'
+            _do_repair_upload(job_id, repair_video_id, _chunk_at, missing_indices, active_address)
+            del b64
             try:
                 os.unlink(tmp_path)
             except Exception:
@@ -799,6 +814,23 @@ def _process_chunked_upload(job_id):
             return
 
         # ── NORMAL UPLOAD MODE ────────────────────────────────────────────────
+        with open(tmp_path, 'rb') as f:
+            raw = f.read()
+        fn = job.get('file_name', 'video.mp4').lower()
+        if fn.endswith('.mp4'):
+            mime = 'video/mp4'
+        elif fn.endswith('.mov'):
+            mime = 'video/quicktime'
+        elif fn.endswith('.webm'):
+            mime = 'video/webm'
+        elif fn.endswith('.gif'):
+            mime = 'image/gif'
+        else:
+            mime = 'video/mp4'
+        data_uri = 'data:' + mime + ';base64,' + base64.b64encode(raw).decode('ascii')
+        del raw
+        chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
+
         job['total']  = len(chunks)
         job['status'] = 'initializing'
 
@@ -908,18 +940,23 @@ def _process_chunked_upload(job_id):
             pass
 
 
-def _do_repair_upload(job_id, video_id, chunks, missing_indices, active_address):
+def _do_repair_upload(job_id, video_id, chunk_source, missing_indices, active_address):
     """
     Background thread: submit only the missing chunks for a video repair job.
-    Uses the same parallel batch logic as _process_chunked_upload but only
-    submits the specific chunk indices in missing_indices.
+    chunk_source is either a list of chunk strings or a callable chunk_source(ci).
     """
     job = lt_upload_jobs[job_id]
     try:
         job['status'] = 'uploading'
+        job['phase']  = 'uploading'
         job['repaired'] = 0
         job['failed']   = 0
         relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+
+        def _get_chunk(ci):
+            if callable(chunk_source):
+                return chunk_source(ci)
+            return chunk_source[ci]
 
         _MAX_BATCH = 25
         _MIN_BATCH = 8
@@ -954,8 +991,9 @@ def _do_repair_upload(job_id, video_id, chunks, missing_indices, active_address)
                     future_map = {}
                     for j, ci in enumerate(batch_ci):
                         cn = nonce + j
-                        f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunks[ci], cn, gas_price, active_address)
-                        future_map[f] = (ci, cn, chunks[ci])
+                        chunk_data = _get_chunk(ci)
+                        f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunk_data, cn, gas_price, active_address)
+                        future_map[f] = (ci, cn, chunk_data)
 
                 had_real_error = False
                 for f in concurrent.futures.as_completed(future_map):
