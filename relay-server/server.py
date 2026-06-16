@@ -775,6 +775,22 @@ def _process_chunked_upload(job_id):
                 return
 
             print(f"[repair] job {job_id}: {len(missing_indices)} missing chunks for video {repair_video_id}")
+
+            # Pre-flight: relay wallet must have enough LCAI for gas
+            relay_bal_wei = w3_local.eth.get_balance(relay_acct.address)
+            gas_price_est = int(w3_local.eth.gas_price * 1.2)
+            cost_per_chunk = 12_000_000 * gas_price_est
+            total_cost_wei = cost_per_chunk * len(missing_indices)
+            bal_lcai  = float(w3_local.from_wei(relay_bal_wei, 'ether'))
+            need_lcai = float(w3_local.from_wei(total_cost_wei, 'ether'))
+            affordable = relay_bal_wei // cost_per_chunk if cost_per_chunk else 0
+            print(f"[repair] relay balance {bal_lcai:.4f} LCAI — need ~{need_lcai:.2f} LCAI for {len(missing_indices)} chunks (~{affordable} affordable)")
+            if affordable < 1:
+                raise Exception(
+                    f'Relay wallet has only {bal_lcai:.4f} LCAI but repair needs ~{need_lcai:.2f} LCAI gas '
+                    f'for {len(missing_indices)} chunks. Fund {relay_acct.address} with LCAI and retry.'
+                )
+
             _do_repair_upload(job_id, repair_video_id, chunks, missing_indices, active_address)
             try:
                 os.unlink(tmp_path)
@@ -1119,12 +1135,15 @@ def health():
     balance      = w3.eth.get_balance(relay.address)
     balance_lcai = float(w3.from_wei(balance, 'ether'))
     return jsonify({
-        'status':         'ok',
-        'relay_address':  relay.address,
-        'relay_balance':  str(balance_lcai) + ' LCAI',
-        'relay_fee_lcai': current_fee_lcai(balance_lcai),
-        'v3_contract':    V3_CONTRACT_ADDRESS,
-        'chain_id':       CHAIN_ID,
+        'status':              'ok',
+        'relay_address':       relay.address,
+        'relay_balance':       str(balance_lcai) + ' LCAI',
+        'relay_fee_lcai':      current_fee_lcai(balance_lcai),
+        'v3_contract':         V3_CONTRACT_ADDRESS,
+        'lighttube_v3':        LIGHTTUBE_V3_ADDRESS or None,
+        'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
+        'lighttube_scan_fix':  'adaptive-50k-subdivide',
+        'chain_id':            CHAIN_ID,
     })
 
 @app.route('/api/check-access', methods=['GET'])
