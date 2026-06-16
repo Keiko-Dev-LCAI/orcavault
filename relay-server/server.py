@@ -81,6 +81,9 @@ GITHUB_THUMB_BRANCH      = "main"
 CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
 CHAIN_ID                 = 9200
 CHUNK_BATCH_SIZE         = int(os.environ.get("CHUNK_BATCH_SIZE", "10"))  # parallel chunks per batch
+# Lightchain RPC rejects txs whose gas*gasPrice exceeds this (default 1 LCAI).
+LT_TX_FEE_CAP_WEI        = int(os.environ.get("LT_TX_FEE_CAP_WEI", str(10**18)))
+LT_CHUNK_GAS_DEFAULT     = int(os.environ.get("LT_CHUNK_GAS_DEFAULT", "3000000"))
 
 # Global nonce lock — ensures only one relay job claims the relay wallet's nonce at a time.
 # Prevents concurrent jobs from grabbing the same nonce and silently dropping chunks.
@@ -506,7 +509,7 @@ def _flush_stuck_relay_nonces(w3, relay_acct, max_cancel=400, repair_video_id=No
     print(f"[relay] inspecting {stuck} pending mempool nonce(s) from {confirmed}…")
     cleared = 0
     waited  = 0
-    gas_price = int(w3.eth.gas_price * 10)
+    gas_price = _cap_gas_price(21_000, int(w3.eth.gas_price * 2))
     for nonce in range(confirmed, min(pending, confirmed + max_cancel)):
         if job is not None:
             job['flush_progress'] = cleared + waited
@@ -599,6 +602,32 @@ def _scan_video_chunk_indices(w3, contract_address, video_id):
     return present_set
 
 
+def _cap_gas_price(gas_limit, gas_price):
+    """Keep gas_limit * gas_price under the chain's 1 LCAI tx-fee cap."""
+    if gas_limit <= 0:
+        return gas_price
+    max_price = LT_TX_FEE_CAP_WEI // gas_limit
+    return min(int(gas_price), max_price)
+
+
+def _estimate_chunk_gas(w3_conn, contract, video_id, chunk_index, chunk_data, from_address):
+    """Estimate gas for one chunk; historical uploads use ~2.2M."""
+    try:
+        built = contract.functions.addVideoChunkFor(
+            video_id, chunk_index, chunk_data
+        ).build_transaction({
+            'from': from_address,
+            'nonce': w3_conn.eth.get_transaction_count(from_address, 'latest'),
+            'gas': LT_CHUNK_GAS_DEFAULT,
+            'gasPrice': w3_conn.eth.gas_price,
+            'chainId': CHAIN_ID,
+        })
+        est = w3_conn.eth.estimate_gas(built)
+        return min(int(est * 1.25) + 50_000, LT_CHUNK_GAS_DEFAULT)
+    except Exception:
+        return LT_CHUNK_GAS_DEFAULT
+
+
 def _wait_tx_receipt(w3_conn, tx_hash, timeout=900):
     """Poll for a transaction receipt; Lightchain can take several minutes per tx."""
     deadline = time.time() + timeout
@@ -621,10 +650,14 @@ def _send_one_chunk_tx(video_id, chunk_index, chunk_data, nonce, gas_price, cont
     try:
         ct         = w3t.eth.contract(address=Web3.to_checksum_address(contract_address), abi=LIGHTTUBE_V2_ABI)
         relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        gas_limit  = _estimate_chunk_gas(
+            w3t, ct, video_id, chunk_index, chunk_data, relay_acct.address
+        )
+        gas_price  = _cap_gas_price(gas_limit, gas_price)
         tx = ct.functions.addVideoChunkFor(video_id, chunk_index, chunk_data).build_transaction({
             'from':     relay_acct.address,
             'nonce':    nonce,
-            'gas':      12_000_000,
+            'gas':      gas_limit,
             'gasPrice': gas_price,
             'chainId':  CHAIN_ID,
         })
@@ -1055,8 +1088,8 @@ def _process_chunked_upload(job_id):
 
             # Pre-flight: relay wallet must have enough LCAI for gas
             relay_bal_wei = w3_local.eth.get_balance(relay_acct.address)
-            gas_price_est = int(w3_local.eth.gas_price * 1.2)
-            cost_per_chunk = 12_000_000 * gas_price_est
+            gas_price_est = _cap_gas_price(LT_CHUNK_GAS_DEFAULT, int(w3_local.eth.gas_price * 1.2))
+            cost_per_chunk = LT_CHUNK_GAS_DEFAULT * gas_price_est
             total_cost_wei = cost_per_chunk * len(missing_indices)
             bal_lcai  = float(w3_local.from_wei(relay_bal_wei, 'ether'))
             need_lcai = float(w3_local.from_wei(total_cost_wei, 'ether'))
@@ -1259,7 +1292,9 @@ def _do_repair_upload(job_id, video_id, chunk_source, missing_indices, active_ad
                 with _nonce_lock:
                     # Use confirmed nonce — never stack txs in mempool when the chain is slow.
                     nonce     = w3_local.eth.get_transaction_count(relay_acct.address, 'latest')
-                    gas_price = int(w3_local.eth.gas_price * 3)
+                    gas_price = _cap_gas_price(
+                        LT_CHUNK_GAS_DEFAULT, int(w3_local.eth.gas_price * 1.2)
+                    )
                     receipt   = _send_one_chunk_tx(
                         video_id, ci, chunk_data, nonce, gas_price, active_address,
                         receipt_timeout=900,
@@ -1451,7 +1486,7 @@ def health():
         'lighttube_v3':        LIGHTTUBE_V3_ADDRESS or None,
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
-        'lighttube_repair_fix': 'fast-flush-no-wait',
+        'lighttube_repair_fix': 'fee-cap-gas-estimate',
         'chain_id':            CHAIN_ID,
     })
 
