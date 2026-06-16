@@ -515,7 +515,23 @@ def _scan_video_chunk_indices(w3, contract_address, video_id):
     return present_set
 
 
-def _send_one_chunk_tx(video_id, chunk_index, chunk_data, nonce, gas_price, contract_address):
+def _wait_tx_receipt(w3_conn, tx_hash, timeout=900):
+    """Poll for a transaction receipt; Lightchain can take several minutes per tx."""
+    deadline = time.time() + timeout
+    tx_hex   = tx_hash.hex() if hasattr(tx_hash, 'hex') else str(tx_hash)
+    while time.time() < deadline:
+        try:
+            return w3_conn.eth.get_transaction_receipt(tx_hash)
+        except Exception:
+            pass
+        try:
+            return w3_conn.eth.wait_for_transaction_receipt(tx_hash, timeout=10)
+        except Exception:
+            time.sleep(5)
+    raise Exception(f'Transaction {tx_hex} not in the chain after {timeout} seconds')
+
+
+def _send_one_chunk_tx(video_id, chunk_index, chunk_data, nonce, gas_price, contract_address, receipt_timeout=900):
     """Send a single addVideoChunkFor transaction. Borrows a pooled Web3 connection."""
     w3t = _borrow_w3()
     try:
@@ -530,7 +546,7 @@ def _send_one_chunk_tx(video_id, chunk_index, chunk_data, nonce, gas_price, cont
         })
         signed  = relay_acct.sign_transaction(tx)
         tx_hash = w3t.eth.send_raw_transaction(signed.raw_transaction)
-        return w3t.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+        return _wait_tx_receipt(w3t, tx_hash, timeout=receipt_timeout)
     finally:
         _return_w3(w3t)
 
@@ -1096,10 +1112,12 @@ def _do_repair_upload(job_id, video_id, chunk_source, missing_indices, active_ad
                     ) from sim_err
 
                 with _nonce_lock:
-                    nonce     = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
-                    gas_price = int(w3_local.eth.gas_price * 2)
+                    # Use confirmed nonce — never stack txs in mempool when the chain is slow.
+                    nonce     = w3_local.eth.get_transaction_count(relay_acct.address, 'latest')
+                    gas_price = int(w3_local.eth.gas_price * 3)
                     receipt   = _send_one_chunk_tx(
-                        video_id, ci, chunk_data, nonce, gas_price, active_address
+                        video_id, ci, chunk_data, nonce, gas_price, active_address,
+                        receipt_timeout=900,
                     )
                 if receipt.get('status') != 1:
                     job['failed'] = job.get('failed', 0) + 1
@@ -1288,7 +1306,7 @@ def health():
         'lighttube_v3':        LIGHTTUBE_V3_ADDRESS or None,
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
-        'lighttube_repair_fix': 'sequential-flush-simulate',
+        'lighttube_repair_fix': 'latest-nonce-900s-wait',
         'chain_id':            CHAIN_ID,
     })
 
