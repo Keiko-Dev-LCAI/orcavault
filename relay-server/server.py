@@ -88,6 +88,7 @@ _nonce_lock = threading.Lock()
 # Only one LightTube blockchain job (upload or repair) at a time on the relay wallet.
 _relay_job_lock = threading.Lock()
 _ACTIVE_LT_JOB_STATUSES = frozenset({'receiving', 'initializing', 'repairing', 'uploading', 'pending'})
+_LT_JOB_STALE_SECS      = int(os.environ.get('LT_JOB_STALE_SECS', '1800'))  # 30 min
 
 # LightTubeV2 ABI (relay functions only)
 LIGHTTUBE_V2_ABI = [
@@ -394,12 +395,42 @@ def _repair_cache_path(video_id, file_size):
     return os.path.join(LIGHTTUBE_REPAIR_CACHE_DIR, f'v3_{video_id}_{file_size}.tmp')
 
 
+def _prune_stale_lt_jobs():
+    """Mark long-idle in-memory jobs as cancelled so a new repair can start."""
+    now = time.time()
+    pruned = 0
+    for job_id, job in list(lt_upload_jobs.items()):
+        if job.get('status') not in _ACTIVE_LT_JOB_STATUSES:
+            continue
+        started = job.get('started_at', 0)
+        if started and (now - started) < _LT_JOB_STALE_SECS:
+            continue
+        job['status'] = 'error'
+        job['error']  = 'Job cancelled (stale — relay cleared lock so you can retry)'
+        pruned += 1
+        print(f"[relay] pruned stale job {job_id} (status was {job.get('status')})")
+    return pruned
+
+
 def _active_lt_job():
     """Return an in-flight LightTube upload/repair job, if any."""
+    _prune_stale_lt_jobs()
     for job in lt_upload_jobs.values():
         if job.get('status') in _ACTIVE_LT_JOB_STATUSES:
             return job
     return None
+
+
+def _cancel_all_lt_jobs(reason='Cancelled by admin'):
+    """Force-clear all in-flight LightTube jobs from memory."""
+    cancelled = 0
+    for job_id, job in list(lt_upload_jobs.items()):
+        if job.get('status') in _ACTIVE_LT_JOB_STATUSES:
+            job['status'] = 'error'
+            job['error']  = reason
+            cancelled += 1
+            print(f"[relay] cancelled job {job_id}")
+    return cancelled
 
 
 def _get_video_total_chunks_on_chain(w3, contract_address, video_id):
@@ -810,11 +841,13 @@ def lighttube_upload_init():
             return jsonify({'error': 'Unauthorized'}), 401
         if not total_pieces:
             return jsonify({'error': 'totalPieces required'}), 400
+        _prune_stale_lt_jobs()
         active = _active_lt_job()
         if active:
             return jsonify({
                 'error': 'Another upload/repair is already running on the relay. '
-                         'Wait for it to finish, or hard-refresh and retry in a few minutes.'
+                         'Wait for it to finish, or click Force Restart below.',
+                'stuck': True,
             }), 409
     else:
         # Normal upload mode — validate wallet, title, and signature
@@ -859,6 +892,7 @@ def lighttube_upload_init():
                 'thumbnail':       thumbnail,
                 'repair_video_id': repair_video_id,
                 'from_cache':      True,
+                'started_at':      time.time(),
             }
             t = threading.Thread(target=_process_chunked_upload, args=(job_id,), daemon=True)
             t.start()
@@ -886,8 +920,22 @@ def lighttube_upload_init():
         'thumbnail':       thumbnail,
         'repair_video_id': repair_video_id,
         'file_size':       file_size,
+        'started_at':      time.time(),
     }
     return jsonify({'jobId': job_id})
+
+
+@app.route('/api/lighttube/cancel-jobs', methods=['POST'])
+def lighttube_cancel_jobs():
+    """Admin: force-clear stuck in-memory upload/repair jobs so a new repair can start."""
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    data = request.get_json(force=True, silent=True) or {}
+    admin_key = (data.get('adminKey') or request.form.get('adminKey') or '').strip()
+    if admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    n = _cancel_all_lt_jobs('Force-cancelled — safe to start repair again')
+    return jsonify({'ok': True, 'cancelled': n})
 
 
 @app.route('/api/lighttube/upload-piece', methods=['POST'])
