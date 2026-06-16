@@ -345,6 +345,46 @@ def save_thumbnail_github(filename, data_b64):
 
 # ─── LightTube relay upload ───────────────────────────────────────────────────
 
+def _mime_for_filename(fn):
+    fn = (fn or 'video.mp4').lower()
+    if fn.endswith('.mp4'):
+        return 'video/mp4'
+    if fn.endswith('.mov'):
+        return 'video/quicktime'
+    if fn.endswith('.webm'):
+        return 'video/webm'
+    if fn.endswith('.gif'):
+        return 'image/gif'
+    return 'video/mp4'
+
+
+def _stream_b64_to_file(raw_path, b64_path, read_size=3 * 1024 * 1024):
+    """Base64-encode a large file to disk without holding the full payload in RAM."""
+    read_size = max(read_size - (read_size % 3), 3)
+    with open(raw_path, 'rb') as inf, open(b64_path, 'w', encoding='ascii') as outf:
+        while True:
+            block = inf.read(read_size)
+            if not block:
+                break
+            outf.write(base64.b64encode(block).decode('ascii'))
+
+
+def _data_uri_chunk_at(ci, prefix, b64_path, b64_len):
+    """Return one on-chain data-URI chunk from prefix + streamed base64 file."""
+    start = ci * CHUNK_SIZE
+    end   = min(start + CHUNK_SIZE, len(prefix) + b64_len)
+    if end <= start:
+        return ''
+    if end <= len(prefix):
+        return prefix[start:end]
+    if start >= len(prefix):
+        with open(b64_path, 'r', encoding='ascii') as f:
+            f.seek(start - len(prefix))
+            return f.read(end - start)
+    with open(b64_path, 'r', encoding='ascii') as f:
+        return prefix[start:] + f.read(end - len(prefix))
+
+
 def _scan_video_chunk_indices(w3, contract_address, video_id):
     """
     Return the set of chunk indices already stored on-chain for a video.
@@ -739,35 +779,17 @@ def _process_chunked_upload(job_id):
                 raise Exception(f'Failed to query blockchain events: {e}')
 
             job['phase'] = 'encoding'
-            print(f"[repair] job {job_id}: reading and base64-encoding file…")
-            with open(tmp_path, 'rb') as f:
-                raw = f.read()
-            fn = job.get('file_name', 'video.mp4').lower()
-            if fn.endswith('.mp4'):
-                mime = 'video/mp4'
-            elif fn.endswith('.mov'):
-                mime = 'video/quicktime'
-            elif fn.endswith('.webm'):
-                mime = 'video/webm'
-            elif fn.endswith('.gif'):
-                mime = 'image/gif'
-            else:
-                mime = 'video/mp4'
-
+            print(f"[repair] job {job_id}: streaming base64 encode to disk (no 2 GB RAM load)…")
+            mime     = _mime_for_filename(job.get('file_name'))
             prefix   = 'data:' + mime + ';base64,'
-            b64      = base64.b64encode(raw).decode('ascii')
-            del raw
-            data_uri_len = len(prefix) + len(b64)
+            b64_path = tmp_path + '.b64'
+            _stream_b64_to_file(tmp_path, b64_path)
+            b64_len      = os.path.getsize(b64_path)
+            data_uri_len = len(prefix) + b64_len
             num_chunks   = (data_uri_len + CHUNK_SIZE - 1) // CHUNK_SIZE
 
             def _chunk_at(ci):
-                start = ci * CHUNK_SIZE
-                end   = start + CHUNK_SIZE
-                if end <= len(prefix):
-                    return prefix[start:end]
-                if start >= len(prefix):
-                    return b64[start - len(prefix):end - len(prefix)]
-                return prefix[start:] + b64[:end - len(prefix)]
+                return _data_uri_chunk_at(ci, prefix, b64_path, b64_len)
 
             print(f"[repair] video {repair_video_id}: found {len(present_set)}/{num_chunks} chunks on-chain after adaptive scan")
 
@@ -806,11 +828,11 @@ def _process_chunked_upload(job_id):
 
             job['phase'] = 'uploading'
             _do_repair_upload(job_id, repair_video_id, _chunk_at, missing_indices, active_address)
-            del b64
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+            for path in (tmp_path, b64_path):
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
             return
 
         # ── NORMAL UPLOAD MODE ────────────────────────────────────────────────
@@ -1216,6 +1238,7 @@ def health():
         'lighttube_v3':        LIGHTTUBE_V3_ADDRESS or None,
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
+        'lighttube_repair_fix': 'stream-b64-to-disk',
         'chain_id':            CHAIN_ID,
     })
 
