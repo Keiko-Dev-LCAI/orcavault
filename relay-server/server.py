@@ -81,6 +81,10 @@ CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC
 CHAIN_ID                 = 9200
 CHUNK_BATCH_SIZE         = int(os.environ.get("CHUNK_BATCH_SIZE", "10"))  # parallel chunks per batch
 
+# Global nonce lock — ensures only one relay job claims the relay wallet's nonce at a time.
+# Prevents concurrent jobs from grabbing the same nonce and silently dropping chunks.
+_nonce_lock = threading.Lock()
+
 # LightTubeV2 ABI (relay functions only)
 LIGHTTUBE_V2_ABI = [
     {"inputs":[{"name":"uploader","type":"address"},{"name":"title","type":"string"},
@@ -379,18 +383,19 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, t
 
         # ── initVideoFor ──────────────────────────────────────────────
         job['status'] = 'initializing'
-        nonce = w3.eth.get_transaction_count(relay_acct.address, 'pending')
-        tx = contract.functions.initVideoFor(
-            Web3.to_checksum_address(user_wallet), title, description, category, len(chunks)
-        ).build_transaction({
-            'from':     relay_acct.address,
-            'nonce':    nonce,
-            'gas':      300_000,
-            'gasPrice': w3.eth.gas_price,
-            'chainId':  CHAIN_ID,
-        })
-        signed  = w3.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        with _nonce_lock:
+            nonce = w3.eth.get_transaction_count(relay_acct.address, 'pending')
+            tx = contract.functions.initVideoFor(
+                Web3.to_checksum_address(user_wallet), title, description, category, len(chunks)
+            ).build_transaction({
+                'from':     relay_acct.address,
+                'nonce':    nonce,
+                'gas':      300_000,
+                'gasPrice': w3.eth.gas_price,
+                'chainId':  CHAIN_ID,
+            })
+            signed  = w3.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
 
         # Parse videoId from VideoCreated event
@@ -447,7 +452,7 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, t
                     except Exception as e:
                         err_str = str(e).lower()
                         if 'nonce too low' in err_str or 'already known' in err_str:
-                            pass  # tx was already mined — treat as success
+                            print(f"[WARNING] chunk {ci} got 'nonce too low' — may have been dropped by concurrent job. Marking as done.")
                         else:
                             had_real_error = True
                             # One retry with a fresh gas price
@@ -673,18 +678,19 @@ def _process_chunked_upload(job_id):
         description = job['description']
         category    = job['category']
 
-        nonce = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
-        tx = contract.functions.initVideoFor(
-            Web3.to_checksum_address(user_wallet), title, description, category, len(chunks)
-        ).build_transaction({
-            'from':     relay_acct.address,
-            'nonce':    nonce,
-            'gas':      300_000,
-            'gasPrice': w3_local.eth.gas_price,
-            'chainId':  CHAIN_ID,
-        })
-        signed  = w3_local.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
-        tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
+        with _nonce_lock:
+            nonce = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
+            tx = contract.functions.initVideoFor(
+                Web3.to_checksum_address(user_wallet), title, description, category, len(chunks)
+            ).build_transaction({
+                'from':     relay_acct.address,
+                'nonce':    nonce,
+                'gas':      300_000,
+                'gasPrice': w3_local.eth.gas_price,
+                'chainId':  CHAIN_ID,
+            })
+            signed  = w3_local.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
+            tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
         receipt = w3_local.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
 
         # Parse videoId from VideoCreated event
@@ -740,7 +746,7 @@ def _process_chunked_upload(job_id):
                     except Exception as e:
                         err_str = str(e).lower()
                         if 'nonce too low' in err_str or 'already known' in err_str:
-                            pass  # tx was already mined — treat as success
+                            print(f"[WARNING] chunk {ci} got 'nonce too low' — may have been dropped by concurrent job. Marking as done.")
                         else:
                             had_real_error = True
                             _send_one_chunk_tx(video_id, ci, chunk, cn, int(w3_local.eth.gas_price * 1.2), active_address)
@@ -770,6 +776,188 @@ def _process_chunked_upload(job_id):
             os.unlink(tmp_path)
         except Exception:
             pass
+
+
+def _do_repair_upload(job_id, video_id, chunks, missing_indices, active_address):
+    """
+    Background thread: submit only the missing chunks for a video repair job.
+    Uses the same parallel batch logic as _process_chunked_upload but only
+    submits the specific chunk indices in missing_indices.
+    """
+    job = lt_upload_jobs[job_id]
+    try:
+        job['status'] = 'uploading'
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+
+        _MAX_BATCH = 25
+        _MIN_BATCH = 8
+        batch_size = max(CHUNK_BATCH_SIZE, 15)
+        idx = 0  # index into missing_indices
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
+            while idx < len(missing_indices):
+                batch_ci = missing_indices[idx : idx + batch_size]  # chunk indices to send
+
+                # Grab nonce while holding the lock, fire all txs, then release
+                with _nonce_lock:
+                    nonce     = w3.eth.get_transaction_count(relay_acct.address, 'pending')
+                    gas_price = int(w3.eth.gas_price * 1.2)
+                    future_map = {}
+                    for j, ci in enumerate(batch_ci):
+                        cn = nonce + j
+                        f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunks[ci], cn, gas_price, active_address)
+                        future_map[f] = (ci, cn, chunks[ci])
+
+                had_real_error = False
+                for f in concurrent.futures.as_completed(future_map):
+                    ci, cn, chunk = future_map[f]
+                    try:
+                        f.result()
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if 'nonce too low' in err_str or 'already known' in err_str:
+                            print(f"[WARNING] repair chunk {ci} got 'nonce too low' — may have been dropped by concurrent job. Marking as done.")
+                        else:
+                            had_real_error = True
+                            try:
+                                _send_one_chunk_tx(video_id, ci, chunk, cn, int(w3.eth.gas_price * 1.2), active_address)
+                            except Exception as re2:
+                                print(f"[repair] retry failed for chunk {ci}: {re2}")
+                    job['progress'] += 1
+
+                idx += len(batch_ci)
+
+                if had_real_error:
+                    batch_size = max(batch_size - 5, _MIN_BATCH)
+                    print(f"[repair] batch error — backing off to {batch_size} chunks/batch")
+                else:
+                    batch_size = min(batch_size + 3, _MAX_BATCH)
+                    print(f"[repair] clean batch — stepping up to {batch_size} chunks/batch")
+
+        job['status'] = 'complete'
+        print(f"[repair] job {job_id} complete — repaired {len(missing_indices)} chunks for video {video_id}")
+    except Exception as e:
+        job['status'] = 'error'
+        job['error']  = str(e)
+        print(f"Repair upload error [{job_id}]: {e}")
+
+
+@app.route('/api/lighttube/repair-video', methods=['POST'])
+def lighttube_repair_video():
+    """
+    Admin endpoint — find and re-submit missing blockchain chunks for a video.
+    Accepts multipart/form-data with fields: adminKey, videoId, file.
+    Queries VideoChunkStored events to find which chunks are already on-chain,
+    then submits only the missing ones using the relay wallet.
+    Returns: {jobId, status, missing, total, present}
+    """
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+
+    admin_key = request.form.get('adminKey', '').strip()
+    if admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    video_id_str = request.form.get('videoId', '').strip()
+    if not video_id_str:
+        return jsonify({'error': 'videoId required'}), 400
+    try:
+        video_id = int(video_id_str)
+    except ValueError:
+        return jsonify({'error': 'videoId must be an integer'}), 400
+
+    video_file = request.files.get('file')
+    if not video_file:
+        return jsonify({'error': 'file required'}), 400
+
+    active_address = LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS
+    if not active_address:
+        return jsonify({'error': 'No LightTube contract address configured'}), 500
+    if not RELAY_PRIVATE_KEY:
+        return jsonify({'error': 'Relay key not configured'}), 500
+
+    # Read uploaded file and build data URI (same MIME detection as _process_chunked_upload)
+    raw = video_file.read()
+    fn  = (video_file.filename or 'video.mp4').lower()
+    if fn.endswith('.mp4'):
+        mime = 'video/mp4'
+    elif fn.endswith('.mov'):
+        mime = 'video/quicktime'
+    elif fn.endswith('.webm'):
+        mime = 'video/webm'
+    elif fn.endswith('.gif'):
+        mime = 'image/gif'
+    else:
+        mime = 'video/mp4'
+
+    data_uri = 'data:' + mime + ';base64,' + base64.b64encode(raw).decode('ascii')
+    del raw  # release raw bytes ASAP
+
+    chunks       = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
+    total_chunks = len(chunks)
+
+    # ── Query blockchain for already-stored chunk indices ──────────────────────
+    # VideoChunkStored(uint256 indexed videoId, uint256 indexed chunkIndex, uint256 totalChunks, string chunkData)
+    # Both videoId and chunkIndex are indexed (confirmed from CONTRACT_ABI in the frontend).
+    try:
+        event_topic    = w3.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
+        video_id_topic = '0x' + hex(video_id)[2:].zfill(64)
+        logs = w3.eth.get_logs({
+            'fromBlock': 0,
+            'toBlock':   'latest',
+            'address':   Web3.to_checksum_address(active_address),
+            'topics':    [event_topic, video_id_topic],
+        })
+        present_set = set()
+        for log in logs:
+            # chunkIndex is the second indexed param → topics[2]
+            chunk_index = int(log['topics'][2].hex(), 16)
+            present_set.add(chunk_index)
+        print(f"[repair] video {video_id}: found {len(present_set)}/{total_chunks} chunks on-chain")
+    except Exception as e:
+        return jsonify({'error': f'Failed to query blockchain events: {e}'}), 500
+
+    missing = [i for i in range(total_chunks) if i not in present_set]
+
+    if not missing:
+        return jsonify({
+            'status':  'ok',
+            'jobId':   None,
+            'missing': 0,
+            'total':   total_chunks,
+            'present': len(present_set),
+            'message': 'No chunks to repair — all chunks are already on-chain',
+        })
+
+    # Create job entry for progress tracking
+    job_id = str(uuid.uuid4())
+    lt_upload_jobs[job_id] = {
+        'status':        'pending',
+        'progress':      0,
+        'total':         len(missing),
+        'videoId':       video_id,
+        'error':         None,
+        'repair':        True,
+        'missing_count': len(missing),
+        'total_chunks':  total_chunks,
+        'present_count': len(present_set),
+    }
+
+    print(f"[repair] starting job {job_id} — {len(missing)} missing chunks for video {video_id}")
+    t = threading.Thread(
+        target=_do_repair_upload,
+        args=(job_id, video_id, chunks, missing, active_address),
+        daemon=True
+    )
+    t.start()
+
+    return jsonify({
+        'status':  'started',
+        'jobId':   job_id,
+        'missing': len(missing),
+        'total':   total_chunks,
+        'present': len(present_set),
+    })
 
 
 @app.route('/api/lighttube/upload-progress/<job_id>', methods=['GET'])
