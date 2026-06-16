@@ -699,17 +699,33 @@ def _process_chunked_upload(job_id):
             try:
                 event_topic    = '0x' + w3_local.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
                 video_id_topic = '0x' + hex(repair_video_id)[2:].zfill(64)
-                logs = w3_local.eth.get_logs({
-                    'fromBlock': 0,
-                    'toBlock':   'latest',
-                    'address':   Web3.to_checksum_address(active_address),
-                    'topics':    [event_topic, video_id_topic],
-                })
-                present_set = set()
-                for log in logs:
-                    chunk_index = int(log['topics'][2].hex(), 16)
-                    present_set.add(chunk_index)
-                print(f"[repair] video {repair_video_id}: found {len(present_set)}/{len(chunks)} chunks on-chain")
+                # Paginate through ALL blocks in 50k-block steps.
+                # A single fromBlock=0,toBlock='latest' call hits the RPC result-count
+                # limit (~1000 events) and returns an incomplete picture.
+                latest_block = w3_local.eth.block_number
+                SCAN_STEP    = 50_000
+                present_set  = set()
+                page_num     = 0
+                total_pages  = (latest_block // SCAN_STEP) + 1
+                print(f"[repair] video {repair_video_id}: scanning {latest_block:,} blocks in {total_pages} pages…")
+                for start in range(0, latest_block + 1, SCAN_STEP):
+                    end = min(start + SCAN_STEP - 1, latest_block)
+                    page_num += 1
+                    try:
+                        page_logs = w3_local.eth.get_logs({
+                            'fromBlock': start,
+                            'toBlock':   end,
+                            'address':   Web3.to_checksum_address(active_address),
+                            'topics':    [event_topic, video_id_topic],
+                        })
+                        for log in page_logs:
+                            chunk_index = int(log['topics'][2].hex(), 16)
+                            present_set.add(chunk_index)
+                    except Exception as page_err:
+                        print(f"[repair] scan page {page_num}/{total_pages} blocks {start}-{end} failed: {page_err} — skipping")
+                    if page_num % 20 == 0 or page_num == total_pages:
+                        print(f"[repair] scan {page_num}/{total_pages} pages done, {len(present_set)} unique chunks found so far")
+                print(f"[repair] video {repair_video_id}: found {len(present_set)}/{len(chunks)} chunks on-chain after full paginated scan")
             except Exception as e:
                 raise Exception(f'Failed to query blockchain events: {e}')
 
