@@ -917,12 +917,31 @@ def _do_repair_upload(job_id, video_id, chunks, missing_indices, active_address)
     job = lt_upload_jobs[job_id]
     try:
         job['status'] = 'uploading'
+        job['repaired'] = 0
+        job['failed']   = 0
         relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
 
         _MAX_BATCH = 25
         _MIN_BATCH = 8
         batch_size = max(CHUNK_BATCH_SIZE, 15)
         idx = 0  # index into missing_indices
+
+        def _try_chunk(ci, cn, chunk):
+            try:
+                _send_one_chunk_tx(video_id, ci, chunk, cn, int(w3.eth.gas_price * 1.2), active_address)
+                return True
+            except Exception as e:
+                err_str = str(e).lower()
+                if 'nonce too low' in err_str or 'already known' in err_str:
+                    print(f"[WARNING] repair chunk {ci} got 'nonce too low' — treating as done.")
+                    return True
+                if 'insufficient funds' in err_str:
+                    raise Exception(
+                        f'Relay wallet out of LCAI at chunk {ci}. '
+                        f'Fund {relay_acct.address} and re-run repair to resume.'
+                    ) from e
+                print(f"[repair] chunk {ci} failed: {e}")
+                return False
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
             while idx < len(missing_indices):
@@ -943,16 +962,23 @@ def _do_repair_upload(job_id, video_id, chunks, missing_indices, active_address)
                     ci, cn, chunk = future_map[f]
                     try:
                         f.result()
+                        job['repaired'] = job.get('repaired', 0) + 1
                     except Exception as e:
                         err_str = str(e).lower()
+                        if 'insufficient funds' in err_str:
+                            raise Exception(
+                                f'Relay wallet out of LCAI at chunk {ci}. '
+                                f'Fund {relay_acct.address} and re-run repair to resume.'
+                            ) from e
                         if 'nonce too low' in err_str or 'already known' in err_str:
-                            print(f"[WARNING] repair chunk {ci} got 'nonce too low' — may have been dropped by concurrent job. Marking as done.")
+                            print(f"[WARNING] repair chunk {ci} got 'nonce too low' — treating as done.")
+                            job['repaired'] = job.get('repaired', 0) + 1
                         else:
                             had_real_error = True
-                            try:
-                                _send_one_chunk_tx(video_id, ci, chunk, cn, int(w3.eth.gas_price * 1.2), active_address)
-                            except Exception as re2:
-                                print(f"[repair] retry failed for chunk {ci}: {re2}")
+                            if _try_chunk(ci, cn, chunk):
+                                job['repaired'] = job.get('repaired', 0) + 1
+                            else:
+                                job['failed'] = job.get('failed', 0) + 1
                     job['progress'] += 1
 
                 idx += len(batch_ci)
@@ -964,8 +990,17 @@ def _do_repair_upload(job_id, video_id, chunks, missing_indices, active_address)
                     batch_size = min(batch_size + 3, _MAX_BATCH)
                     print(f"[repair] clean batch — stepping up to {batch_size} chunks/batch")
 
+        repaired = job.get('repaired', 0)
+        failed   = job.get('failed', 0)
+        if failed > 0 and repaired == 0:
+            raise Exception(f'Repair failed — 0 of {len(missing_indices)} chunks were stored on-chain.')
+        if failed > 0:
+            job['status'] = 'error'
+            job['error']  = f'Partial repair — {repaired} stored, {failed} failed. Re-run repair to continue.'
+            print(f"[repair] job {job_id} partial — {repaired} ok, {failed} failed for video {video_id}")
+            return
         job['status'] = 'complete'
-        print(f"[repair] job {job_id} complete — repaired {len(missing_indices)} chunks for video {video_id}")
+        print(f"[repair] job {job_id} complete — repaired {repaired} chunks for video {video_id}")
     except Exception as e:
         job['status'] = 'error'
         job['error']  = str(e)
