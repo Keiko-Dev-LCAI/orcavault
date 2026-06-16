@@ -419,21 +419,76 @@ def _get_video_total_chunks_on_chain(w3, contract_address, video_id):
     return int(total_chunks)
 
 
-def _flush_stuck_relay_nonces(w3, relay_acct, max_cancel=400):
+def _pending_relay_tx(w3, relay_acct, nonce):
+    """Return the relay wallet's pending tx for a nonce, if the node exposes it."""
+    try:
+        block = w3.eth.get_block('pending', full_transactions=True)
+        relay = relay_acct.address.lower()
+        for tx in block.transactions:
+            if tx['from'].lower() == relay and tx['nonce'] == nonce:
+                return tx
+    except Exception:
+        pass
+    return None
+
+
+def _pending_tx_is_valid_chunk(w3, relay_acct, contract_address, tx, repair_video_id=None):
+    """True if a pending tx is a valid addVideoChunkFor for the repair video."""
+    if not tx or not tx.get('to'):
+        return False
+    if tx['to'].lower() != contract_address.lower():
+        return False
+    if not tx.get('input') or len(tx['input']) <= 10:
+        return False
+    try:
+        ct = w3.eth.contract(
+            address=Web3.to_checksum_address(contract_address),
+            abi=LIGHTTUBE_V2_ABI,
+        )
+        _fn, params = ct.decode_function_input(tx['input'])
+        if repair_video_id is not None and int(params['videoId']) != int(repair_video_id):
+            return False
+        ct.functions.addVideoChunkFor(
+            params['videoId'], params['chunkIndex'], params['chunkData']
+        ).call({'from': relay_acct.address})
+        return True
+    except Exception:
+        return False
+
+
+def _flush_stuck_relay_nonces(w3, relay_acct, max_cancel=400, repair_video_id=None, contract_address=None, job=None):
     """
-    Replace stuck pending relay-wallet txs with 0-value self-transfers so new
-    chunk submissions can mine. Needed when a bad repair (wrong video ID, etc.)
-    fills the mempool with reverting transactions.
+    Clear only invalid/reverting pending relay txs. Valid repair chunk txs are
+    left alone and waited out so we don't cancel good submissions.
     """
     confirmed = w3.eth.get_transaction_count(relay_acct.address, 'latest')
     pending   = w3.eth.get_transaction_count(relay_acct.address, 'pending')
     stuck     = pending - confirmed
     if stuck <= 0:
         return 0
-    print(f"[relay] flushing {stuck} stuck mempool nonce(s) from {confirmed}…")
+    print(f"[relay] inspecting {stuck} pending mempool nonce(s) from {confirmed}…")
     cleared = 0
+    waited  = 0
     gas_price = int(w3.eth.gas_price * 10)
     for nonce in range(confirmed, min(pending, confirmed + max_cancel)):
+        if job is not None:
+            job['flush_progress'] = cleared + waited
+            job['flush_total']    = stuck
+        pending_tx = _pending_relay_tx(w3, relay_acct, nonce)
+        if contract_address and _pending_tx_is_valid_chunk(
+            w3, relay_acct, contract_address, pending_tx, repair_video_id
+        ):
+            print(f"[relay] nonce {nonce}: valid repair chunk pending — waiting to mine")
+            try:
+                _wait_tx_receipt(w3, pending_tx['hash'], timeout=900)
+                waited += 1
+                confirmed = w3.eth.get_transaction_count(relay_acct.address, 'latest')
+                pending   = w3.eth.get_transaction_count(relay_acct.address, 'pending')
+                if nonce >= pending:
+                    break
+                continue
+            except Exception as err:
+                print(f"[relay] nonce {nonce}: valid chunk did not mine in time: {err}")
         try:
             tx = {
                 'to':       relay_acct.address,
@@ -445,7 +500,7 @@ def _flush_stuck_relay_nonces(w3, relay_acct, max_cancel=400):
             }
             signed  = relay_acct.sign_transaction(tx)
             tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            receipt = _wait_tx_receipt(w3, tx_hash, timeout=300)
             if receipt.get('status') == 1:
                 cleared += 1
         except Exception as err:
@@ -455,8 +510,8 @@ def _flush_stuck_relay_nonces(w3, relay_acct, max_cancel=400):
                 continue
             print(f"[relay] flush nonce {nonce} failed: {err}")
             break
-    print(f"[relay] flushed {cleared} stuck nonce(s)")
-    return cleared
+    print(f"[relay] flush done — cancelled {cleared}, waited {waited}")
+    return cleared + waited
 
 
 def _scan_video_chunk_indices(w3, contract_address, video_id):
@@ -1085,9 +1140,14 @@ def _do_repair_upload(job_id, video_id, chunk_source, missing_indices, active_ad
             chain_total = _get_video_total_chunks_on_chain(w3_local, active_address, video_id)
 
             job['phase'] = 'flushing'
-            flushed = _flush_stuck_relay_nonces(w3_local, relay_acct)
+            flushed = _flush_stuck_relay_nonces(
+                w3_local, relay_acct,
+                repair_video_id=video_id,
+                contract_address=active_address,
+                job=job,
+            )
             if flushed:
-                print(f"[repair] job {job_id}: cleared {flushed} stuck relay nonce(s) before upload")
+                print(f"[repair] job {job_id}: resolved {flushed} pending relay nonce(s) before upload")
             job['phase'] = 'uploading'
 
             def _get_chunk(ci):
@@ -1306,7 +1366,7 @@ def health():
         'lighttube_v3':        LIGHTTUBE_V3_ADDRESS or None,
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
-        'lighttube_repair_fix': 'latest-nonce-900s-wait',
+        'lighttube_repair_fix': 'smart-flush-wait-valid',
         'chain_id':            CHAIN_ID,
     })
 
