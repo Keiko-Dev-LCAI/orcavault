@@ -697,7 +697,7 @@ def _process_chunked_upload(job_id):
         if repair_video_id is not None:
             job['status'] = 'repairing'
             try:
-                event_topic    = w3_local.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
+                event_topic    = '0x' + w3_local.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
                 video_id_topic = '0x' + hex(repair_video_id)[2:].zfill(64)
                 logs = w3_local.eth.get_logs({
                     'fromBlock': 0,
