@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Audio & Visual Archives — Your Memories, On-Chain Forever</title>
+<title>Lightchain Archives — Your Memories, On-Chain Forever</title>
 <!--
 ╔══════════════════════════════════════════════════════════════════╗
 ║           AUDIO & VISUAL ARCHIVES — SOLIDITY CONTRACT            ║
@@ -445,7 +445,7 @@ footer a{color:var(--gold);text-decoration:none}
   <a class="nav-logo" href="#" onclick="showScreen('landing');return false">
     <span class="nav-logo-icon">🎞️</span>
     <div>
-      <div class="nav-logo-text">Audio &amp; Visual Archives</div>
+      <div class="nav-logo-text">Lightchain Archives</div>
       <div class="nav-logo-sub">Your Personal Time Capsule · On-Chain Forever</div>
     </div>
   </a>
@@ -463,7 +463,7 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="hero">
     <div class="hero-inner">
       <div class="hero-eyebrow">🌐 On-Chain · Permanent · Yours Forever</div>
-      <h1 class="hero-title">Audio &amp; Visual<br><span>Archives</span></h1>
+      <h1 class="hero-title">Lightchain<br><span>Archives</span></h1>
       <p class="hero-tagline">Your memories. On-chain. Forever. The personal Wayback Machine — photos, videos, audio, text, and documents stored directly on the Lightchain blockchain. No cloud. No servers. No expiry.</p>
       <div class="hero-ctas">
         <button class="btn btn-gold" onclick="connectAndCreate()">🎞️ Create Your Archive</button>
@@ -936,6 +936,8 @@ footer a{color:var(--gold);text-decoration:none}
       </div>
       <div class="sidebar-section">
         <button class="btn btn-sm btn-outline" style="width:100%;justify-content:center;margin-bottom:10px" onclick="goViewVaultFromMemory()">← Back to Archive</button>
+        <button class="btn btn-sm btn-outline" style="width:100%;justify-content:center;margin-bottom:10px" onclick="showScreen('landing')">🏠 Home Page</button>
+        <button class="btn btn-sm btn-outline" id="btn-disconnect-sidebar" style="width:100%;justify-content:center;margin-bottom:10px;display:none" onclick="disconnectWallet()">🔌 Disconnect Wallet</button>
         <div id="creator-delete-wrap" style="display:none">
           <button class="creator-delete-btn" onclick="creatorDeleteMemory()">🗑️ Delete My Memory</button>
           <p style="font-size:15px;color:var(--muted);margin-top:8px;line-height:1.5">Only you can delete your own memories. The blockchain record remains but it will be removed from this archive.</p>
@@ -1053,7 +1055,7 @@ footer a{color:var(--gold);text-decoration:none}
     <div style="font-size:44px;margin-bottom:12px;text-align:center">⚖️</div>
     <div class="modal-title">Terms of Use</div>
     <div style="background:rgba(232,184,75,0.08);border:2px solid var(--gold);border-radius:12px;padding:20px;margin:16px 0;font-size:18px;line-height:1.7;color:var(--text)">
-      <p style="margin-bottom:14px">Audio &amp; Visual Archives is a <strong>decentralized interface</strong> to the Lightchain blockchain. The developer does not host, store, or control any content uploaded through this app.</p>
+      <p style="margin-bottom:14px">Lightchain Archives is a <strong>decentralized interface</strong> to the Lightchain blockchain. The developer does not host, store, or control any content uploaded through this app.</p>
       <p style="margin-bottom:14px"><strong style="color:var(--red)">The following content is strictly prohibited:</strong></p>
       <ul style="padding-left:20px;margin-bottom:14px">
         <li style="margin-bottom:6px">Child sexual abuse material (CSAM) or any content involving the exploitation of minors</li>
@@ -1062,7 +1064,7 @@ footer a{color:var(--gold);text-decoration:none}
         <li style="margin-bottom:6px">Content intended to harass, threaten, or harm others</li>
       </ul>
       <p style="margin-bottom:14px"><strong>All uploads are permanent and public.</strong> Your wallet address is permanently linked to everything you store. There is no way to delete content from the blockchain.</p>
-      <p style="color:var(--muted);font-size:17px">By using this app you accept sole responsibility for all content you upload. The developer of Audio &amp; Visual Archives bears no liability for user-submitted content.</p>
+      <p style="color:var(--muted);font-size:17px">By using this app you accept sole responsibility for all content you upload. The developer of Lightchain Archives bears no liability for user-submitted content.</p>
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
       <input type="checkbox" id="terms-check" style="width:20px;height:20px;cursor:pointer" onchange="document.getElementById('terms-confirm-btn').disabled=!this.checked">
@@ -1170,8 +1172,8 @@ footer a{color:var(--gold);text-decoration:none}
 
 <!-- ── FOOTER ── -->
 <footer>
-  <p style="margin-bottom:8px">🎞️ <strong>Audio &amp; Visual Archives</strong> — Built on <a href="https://lightchain.ai" target="_blank">Lightchain AI</a></p>
-  <p style="margin-bottom:8px">Audio &amp; Visual Archives is a decentralized application. Media is stored on the Lightchain blockchain. This app is not responsible for lost access.</p>
+  <p style="margin-bottom:8px">🗂️ <strong>Lightchain Archives</strong> — Built on <a href="https://lightchain.ai" target="_blank">Lightchain AI</a></p>
+  <p style="margin-bottom:8px">Lightchain Archives is a decentralized application. Media is stored on the Lightchain blockchain. This app is not responsible for lost access.</p>
   <p>Part of the <a href="https://keiko-dev-lcai.github.io/orcapod/" target="_blank">🐬 Orca Pod</a> ecosystem · <a href="https://lightchain.ai" target="_blank">Lightchain AI</a></p>
 </footer>
 
@@ -1406,6 +1408,7 @@ function disconnectWallet() {
   document.getElementById('btn-my-archives').style.display = 'none';
   document.getElementById('nav-wallet-addr').style.display = 'none';
   document.getElementById('sv-add-btn-wrap').style.display = 'none';
+  const bds = document.getElementById('btn-disconnect-sidebar'); if (bds) bds.style.display = 'none';
   updateRelayUI();
   showScreen('landing');
 }
@@ -1414,6 +1417,7 @@ function updateNavWallet() {
   const bc = document.getElementById('btn-connect'); if (bc) bc.style.display = 'none';
   document.getElementById('btn-disconnect').style.display = '';
   document.getElementById('btn-my-archives').style.display = '';
+  const bds = document.getElementById('btn-disconnect-sidebar'); if (bds) bds.style.display = '';
   const el = document.getElementById('nav-wallet-addr');
   el.textContent = shortAddr(wallet);
   el.style.display = '';
@@ -1662,7 +1666,7 @@ async function loadAndShowVault(vaultId) {
 
     // Share links
     const shareUrl = getVaultURL(vaultId);
-    const shareText = 'Check out my "' + vm.name + '" archive on Audio & Visual Archives — stored forever on Lightchain!';
+    const shareText = 'Check out my "' + vm.name + '" archive on Lightchain Archives — stored forever on Lightchain!';
     setShareLinks('sv', shareUrl, shareText);
 
     // Owner check
@@ -1941,7 +1945,7 @@ async function loadAndShowMemory(vaultId, idx) {
 
     // Share
     const shareUrl = getMemoryURL(vaultId, idx);
-    const shareText = '"' + mem.title + '" — stored forever on Lightchain via Audio & Visual Archives';
+    const shareText = '"' + mem.title + '" — stored forever on Lightchain via Lightchain Archives';
     setShareLinks('vm', shareUrl, shareText);
 
     // Media
@@ -2743,7 +2747,7 @@ function setShareLinks(prefix, url, text) {
   if (wa) wa.href = 'https://wa.me/?text=' + encodeURIComponent(text + '\n' + url);
   if (tw) tw.href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text) + '&url=' + encodeURIComponent(url);
   if (fb) fb.href = 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(url);
-  if (em) em.href = 'mailto:?subject=' + encodeURIComponent('A memory for you — Audio & Visual Archives') + '&body=' + encodeURIComponent(text + '\n\nView it here: ' + url);
+  if (em) em.href = 'mailto:?subject=' + encodeURIComponent('A memory for you — Lightchain Archives') + '&body=' + encodeURIComponent(text + '\n\nView it here: ' + url);
 
   // QR code
   const qrEl = document.getElementById(prefix + '-qr');
