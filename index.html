@@ -469,6 +469,26 @@ footer a{color:var(--gold);text-decoration:none}
 .admin-mod-item:hover{background:rgba(232,82,82,0.15)}
 .admin-mod-item.restore{color:var(--green)}
 .admin-mod-item.restore:hover{background:rgba(82,201,127,0.15)}
+
+/* ── MOBILE LAYOUT FIXES (Fix 1, 2, 3 — June 2026) ── */
+/* Fix 1: X link — allow it to shrink + ellipsis so @KeikoDevLCAI stays visible */
+#nav-x-link{flex-shrink:1 !important;min-width:0;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:600px){
+  /* Fix 1: Hide Browse label text to free nav space for X username */
+  .browse-label{display:none}
+  /* Fix 2: How-It-Works cards — stack vertically, full width */
+  .how-grid{grid-template-columns:1fr !important;gap:10px !important}
+  .how-card{padding:14px 16px !important}
+  /* Fix 3: Compact hero so bottom buttons reach the screen */
+  .hero{padding:18px 18px 10px !important}
+  .hero-eyebrow{display:none}
+  .hero-tagline{font-size:18px !important;margin-bottom:10px !important}
+  .hero-title{margin-bottom:8px !important}
+  .section.section-alt{padding:12px 14px !important}
+  /* Fix 3: Bottom buttons — side-by-side row */
+  #landing-footer-bar{padding:8px 14px !important;display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px}
+  #landing-footer-bar .btn{margin-left:0 !important;flex:1;min-width:130px;font-size:18px !important;padding:10px 12px !important;min-height:44px !important;justify-content:center}
+}
 </style>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#f59e0b">
@@ -486,10 +506,10 @@ footer a{color:var(--gold);text-decoration:none}
     </div>
   </a>
   <div class="nav-spacer"></div>
-  <a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" style="font-size:16px;color:var(--purple);text-decoration:none;font-weight:700;white-space:nowrap;flex-shrink:0">𝕏 @KeikoDevLCAI</a>
+  <a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" id="nav-x-link" style="font-size:16px;color:var(--purple);text-decoration:none;font-weight:700;white-space:nowrap;flex-shrink:0">𝕏 <span class="x-handle">@KeikoDevLCAI</span></a>
   <span id="nav-wallet-addr" class="nav-wallet-addr" style="display:none"></span>
   <button class="nav-btn nav-btn-outline" id="btn-my-archives" onclick="goMyArchives()" style="display:none">📂 My Archives</button>
-  <button class="nav-btn nav-btn-outline" onclick="showBrowseScreen()">🌐 Browse</button>
+  <button class="nav-btn nav-btn-outline" onclick="showBrowseScreen()">🌐<span class="browse-label"> Browse</span></button>
   <button class="nav-btn nav-btn-primary" id="btn-connect" onclick="connectWallet()">🔗 <span class="connect-label">Connect Wallet</span></button>
   <button class="nav-btn nav-btn-outline" id="btn-disconnect" onclick="disconnectWallet()" style="display:none">Disconnect</button>
 </nav>
@@ -539,10 +559,10 @@ footer a{color:var(--gold);text-decoration:none}
     </div><!-- /section-content -->
   </div>
 
-  <div style="text-align:center;padding:16px 56px 8px;font-size:18px;color:var(--muted)">
+  <div id="landing-footer-bar" style="text-align:center;padding:16px 56px 8px;font-size:18px;color:var(--muted)">
     Uploads require a small gas fee in LCAI · No monthly fees ever ·
-    <button class="btn btn-outline" style="padding:8px 18px;font-size:17px;min-height:auto;margin-left:8px" onclick="showScreen('recovery')">🔐 Recovery Info</button>
-    <button class="btn btn-outline" style="padding:8px 18px;font-size:17px;min-height:auto;margin-left:8px" onclick="document.getElementById('modal-terms').classList.remove('hidden')">📋 Terms &amp; Disclosures</button>
+    <button class="btn btn-outline" style="padding:8px 18px;font-size:18px;min-height:auto;margin-left:8px" onclick="showScreen('recovery')">🔐 Recovery Info</button>
+    <button class="btn btn-outline" style="padding:8px 18px;font-size:18px;min-height:auto;margin-left:8px" onclick="document.getElementById('modal-terms').classList.remove('hidden')">📋 Terms &amp; Disclosures</button>
   </div>
 
   <!-- ══ RECOVERY INFO CARD — LANDING (hidden — moved to screen-recovery) ══ -->
