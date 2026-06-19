@@ -34,7 +34,7 @@ Optional:
   PAID_WALLETS_FILE        = path to persistent JSON file (default: /data/paid_wallets.json)
 """
 
-import os, json, time, uuid, base64, threading, urllib.request, urllib.parse, concurrent.futures, queue, secrets, tempfile, shutil
+import os, json, time, uuid, base64, threading, urllib.request, urllib.parse, concurrent.futures, queue, secrets, tempfile, shutil, subprocess
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from web3 import Web3
@@ -745,6 +745,31 @@ def _append_chunk_string_to_file(outf, chunk_str, carry_holder):
         outf.write(base64.b64decode(to_decode))
 
 
+def _apply_faststart(file_path, label=''):
+    """Move MP4 moov atom to front for mobile playback via ffmpeg -movflags +faststart.
+    Non-fatal: if ffmpeg is missing or fails, the original file is left untouched."""
+    fs_tmp = file_path + '.fs'
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-i', file_path, '-movflags', '+faststart', '-c', 'copy', '-y', fs_tmp],
+            capture_output=True, timeout=600
+        )
+        if result.returncode == 0 and os.path.isfile(fs_tmp) and os.path.getsize(fs_tmp) > 0:
+            os.replace(fs_tmp, file_path)
+            print(f"[faststart] {label}: moov atom moved to front ✓")
+        else:
+            err = result.stderr.decode(errors='replace')[:300] if result.stderr else 'unknown error'
+            print(f"[faststart] {label}: ffmpeg non-zero exit (non-fatal) — {err}")
+            try: os.remove(fs_tmp)
+            except Exception: pass
+    except FileNotFoundError:
+        print(f"[faststart] {label}: ffmpeg not installed — skipping (add ffmpeg to nixpacks.toml)")
+    except Exception as fe:
+        print(f"[faststart] {label}: error (non-fatal) — {fe}")
+        try: os.remove(fs_tmp)
+        except Exception: pass
+
+
 def _assemble_lighttube_stream(version, video_id):
     """Build cached MP4 from on-chain chunks — low RAM, batched RPC fetch."""
     key = _stream_cache_key(version, video_id)
@@ -792,8 +817,11 @@ def _assemble_lighttube_stream(version, video_id):
                 padded = carry[0] + '=' * ((4 - len(carry[0]) % 4) % 4)
                 outf.write(base64.b64decode(padded))
 
-        nbytes = os.path.getsize(tmp_path)
         os.replace(tmp_path, out_path)
+        # FastStart: move moov atom to front so mobile browsers can play without seeking to end
+        if mime_type == 'video/mp4':
+            _apply_faststart(out_path, key)
+        nbytes = os.path.getsize(out_path)
         _stream_save_meta(meta_path, total_chunks, nbytes, mime_type)
         _stream_set_build(key, status='ready', progress=total_chunks, total=total_chunks, mime=mime_type, bytes=nbytes)
         print(f"[stream] {key}: ready ({nbytes:,} bytes)")
@@ -969,8 +997,11 @@ def _assemble_orcavault_stream(version, memory_id):
                 padded = carry[0] + '=' * ((4 - len(carry[0]) % 4) % 4)
                 outf.write(base64.b64decode(padded))
 
-        nbytes = os.path.getsize(tmp_path)
         os.replace(tmp_path, out_path)
+        # FastStart: move moov atom to front for mobile MP4 playback
+        if mime_type == 'video/mp4':
+            _apply_faststart(out_path, key)
+        nbytes = os.path.getsize(out_path)
         _ov_stream_save_meta(meta_path, total_chunks, nbytes, mime_type, mem_type)
         _stream_set_build(key, status='ready', progress=total_chunks, total=total_chunks,
                           mime=mime_type, bytes=nbytes, memType=mem_type)
