@@ -540,8 +540,9 @@ footer a{color:var(--gold);text-decoration:none}
   </div>
 
   <div style="text-align:center;padding:16px 56px 8px;font-size:18px;color:var(--muted)">
-    Upload costs ~$0.000015 in gas · No monthly fees ever ·
+    Uploads require a small gas fee in LCAI · No monthly fees ever ·
     <button class="btn btn-outline" style="padding:8px 18px;font-size:17px;min-height:auto;margin-left:8px" onclick="showScreen('recovery')">🔐 Recovery Info</button>
+    <button class="btn btn-outline" style="padding:8px 18px;font-size:17px;min-height:auto;margin-left:8px" onclick="document.getElementById('modal-terms').classList.remove('hidden')">📋 Terms &amp; Disclosures</button>
   </div>
 
   <!-- ══ RECOVERY INFO CARD — LANDING (hidden — moved to screen-recovery) ══ -->
@@ -3673,10 +3674,5 @@ function confirmUploadWarning() {
 </script>
 <div id="_dctoast" style="display:none;position:fixed;bottom:24px;right:24px;background:#6c47ff;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 2px 16px rgba(0,0,0,.4);">Wallet copied! Opening OrcaMail&#x2026;</div>
 
-<footer>
-  Free to browse · Uploads require a small gas fee in LCAI · Content that violates community standards may be removed from this app
-  · <button onclick="document.getElementById('modal-terms').classList.remove('hidden')" style="background:none;border:none;color:var(--gold);cursor:pointer;font-size:17px;text-decoration:underline;font-family:inherit;padding:0">Terms of Use</button>
-  <br><span style="font-size:15px">⚠️ All uploads are permanently recorded on the Lightchain blockchain and cannot be erased from the chain — only hidden from this interface. Private memories are hidden from this app but remain accessible on-chain by anyone querying the blockchain directly.</span>
-</footer>
 </body>
 </html>
