@@ -68,6 +68,7 @@ LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
 LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
 LIGHTTUBE_REPAIR_CACHE_DIR = os.environ.get("LIGHTTUBE_REPAIR_CACHE_DIR", "/data/lt_repair_cache")
+LT_STREAM_CACHE_DIR      = os.environ.get("LT_STREAM_CACHE_DIR", "/data/lt_stream_cache")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
 # ── AIVM (Lightchain decentralized inference) ────────────────────────────────
 _AIVM_GATEWAY  = "https://chat-api.mainnet.lightchain.ai"
@@ -95,6 +96,11 @@ _nonce_lock = threading.Lock()
 _relay_job_lock = threading.Lock()
 _ACTIVE_LT_JOB_STATUSES = frozenset({'receiving', 'initializing', 'repairing', 'uploading', 'pending'})
 _LT_JOB_STALE_SECS      = int(os.environ.get('LT_JOB_STALE_SECS', '1800'))  # 30 min
+
+# Stream cache builds — assemble on-chain chunks to disk for HTTP Range playback.
+_stream_builds      = {}
+_stream_builds_lock = threading.Lock()
+_STREAM_FETCH_BATCH = int(os.environ.get("STREAM_FETCH_BATCH", "20"))
 
 # LightTubeV2 ABI (relay functions only)
 LIGHTTUBE_V2_ABI = [
@@ -603,6 +609,188 @@ def _scan_video_chunk_indices(w3, contract_address, video_id):
         if page_num % 5 == 0 or end >= latest_block:
             print(f"[repair] scan page {page_num}/{total_pages} done — {len(present_set)} unique chunks so far")
     return present_set
+
+
+def _lighttube_contract_for_version(version):
+    if version == 'v3':
+        addr = LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS
+    elif version == 'v2':
+        addr = LIGHTTUBE_V2_ADDRESS
+    else:
+        return None
+    return addr if addr else None
+
+
+def _stream_cache_key(version, video_id):
+    return f"lighttube-{version}-{video_id}"
+
+
+def _stream_paths(version, video_id):
+    key  = _stream_cache_key(version, video_id)
+    os.makedirs(LT_STREAM_CACHE_DIR, exist_ok=True)
+    base = os.path.join(LT_STREAM_CACHE_DIR, key)
+    return base + '.mp4', base + '.meta.json'
+
+
+def _stream_load_meta(meta_path):
+    try:
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _stream_save_meta(meta_path, total_chunks, nbytes, mime):
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            'totalChunks': total_chunks,
+            'bytes':       nbytes,
+            'mime':        mime,
+            'built_at':    int(time.time()),
+        }, f)
+
+
+def _stream_get_build(key):
+    with _stream_builds_lock:
+        return _stream_builds.get(key)
+
+
+def _stream_set_build(key, **fields):
+    with _stream_builds_lock:
+        state = _stream_builds.setdefault(key, {})
+        state.update(fields)
+
+
+def _fetch_lt_chunk_string(w3_conn, contract_address, video_id, chunk_index, from_block=0):
+    """Fetch one VideoChunkStored payload for a chunk index (latest event wins)."""
+    from eth_abi import decode as abi_decode
+    addr        = Web3.to_checksum_address(contract_address)
+    event_topic = '0x' + w3_conn.keccak(text='VideoChunkStored(uint256,uint256,uint256,string)').hex()
+    video_topic = '0x' + hex(video_id)[2:].zfill(64)
+    chunk_topic = '0x' + hex(chunk_index)[2:].zfill(64)
+    logs = []
+    try:
+        logs = w3_conn.eth.get_logs({
+            'fromBlock': from_block,
+            'toBlock':   'latest',
+            'address':   addr,
+            'topics':    [event_topic, video_topic, chunk_topic],
+        })
+    except Exception:
+        logs = []
+    if not logs:
+        try:
+            latest = w3_conn.eth.block_number
+            recent_from = max(from_block, latest - 500_000)
+            if recent_from > from_block:
+                logs = w3_conn.eth.get_logs({
+                    'fromBlock': recent_from,
+                    'toBlock':   'latest',
+                    'address':   addr,
+                    'topics':    [event_topic, video_topic, chunk_topic],
+                })
+        except Exception:
+            logs = []
+    if not logs:
+        return None
+    log  = logs[-1]
+    data = log['data']
+    if isinstance(data, str):
+        data = bytes.fromhex(data[2:])
+    _total, chunk_data = abi_decode(['uint256', 'string'], data)
+    return chunk_data
+
+
+def _append_chunk_string_to_file(outf, chunk_str, carry_holder):
+    """Decode one on-chain data-URI chunk segment into outf (carry across boundaries)."""
+    if not chunk_str:
+        raise ValueError('empty chunk')
+    b64raw = chunk_str.split(',', 1)[1] if ',' in chunk_str else chunk_str
+    if not b64raw:
+        raise ValueError('empty chunk payload')
+    carry = carry_holder[0] + b64raw
+    aligned_len = (len(carry) // 4) * 4
+    carry_holder[0] = carry[aligned_len:]
+    to_decode = carry[:aligned_len]
+    if to_decode:
+        outf.write(base64.b64decode(to_decode))
+
+
+def _assemble_lighttube_stream(version, video_id):
+    """Build cached MP4 from on-chain chunks — low RAM, batched RPC fetch."""
+    key = _stream_cache_key(version, video_id)
+    out_path, meta_path = _stream_paths(version, video_id)
+    tmp_path = out_path + '.building'
+    try:
+        contract_address = _lighttube_contract_for_version(version)
+        if not contract_address:
+            raise Exception(f'LightTube {version} contract not configured on relay')
+        w3_local     = Web3(Web3.HTTPProvider(RPC_URL))
+        total_chunks = _get_video_total_chunks_on_chain(w3_local, contract_address, video_id)
+        _stream_set_build(key, status='building', progress=0, total=total_chunks, error=None)
+
+        mime_type = 'video/mp4'
+        carry     = ['']
+        fetched   = 0
+        with open(tmp_path, 'wb') as outf:
+            for start in range(0, total_chunks, _STREAM_FETCH_BATCH):
+                end = min(start + _STREAM_FETCH_BATCH, total_chunks)
+                batch_indices = list(range(start, end))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=_STREAM_FETCH_BATCH) as pool:
+                    futures = {
+                        ci: pool.submit(_fetch_lt_chunk_string, w3_local, contract_address, video_id, ci)
+                        for ci in batch_indices
+                    }
+                    for ci in batch_indices:
+                        chunk_str = futures[ci].result()
+                        if not chunk_str:
+                            raise Exception(f'Chunk {ci} missing on-chain for video {video_id}')
+                        if ci == 0 and chunk_str.startswith('data:'):
+                            m = chunk_str.split(';', 1)[0]
+                            if m.startswith('data:'):
+                                mime_type = m[5:] or mime_type
+                        _append_chunk_string_to_file(outf, chunk_str, carry)
+                        fetched += 1
+                _stream_set_build(key, progress=fetched, total=total_chunks)
+                if fetched % 500 == 0 or fetched == total_chunks:
+                    print(f"[stream] {key}: assembled {fetched}/{total_chunks} chunks")
+            if carry[0]:
+                padded = carry[0] + '=' * ((4 - len(carry[0]) % 4) % 4)
+                outf.write(base64.b64decode(padded))
+
+        nbytes = os.path.getsize(tmp_path)
+        os.replace(tmp_path, out_path)
+        _stream_save_meta(meta_path, total_chunks, nbytes, mime_type)
+        _stream_set_build(key, status='ready', progress=total_chunks, total=total_chunks, mime=mime_type, bytes=nbytes)
+        print(f"[stream] {key}: ready ({nbytes:,} bytes)")
+    except Exception as e:
+        try:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        _stream_set_build(key, status='error', error=str(e))
+        print(f"[stream] {key}: build failed — {e}")
+
+
+def _ensure_stream_build_started(version, video_id):
+    key = _stream_cache_key(version, video_id)
+    out_path, meta_path = _stream_paths(version, video_id)
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        meta = _stream_load_meta(meta_path) or {}
+        _stream_set_build(key, status='ready', progress=meta.get('totalChunks', 0),
+                          total=meta.get('totalChunks', 0), mime=meta.get('mime', 'video/mp4'),
+                          bytes=meta.get('bytes', os.path.getsize(out_path)))
+        return _stream_get_build(key)
+
+    with _stream_builds_lock:
+        state = _stream_builds.get(key)
+        if state and state.get('status') in ('building', 'ready'):
+            return state
+        _stream_builds[key] = {'status': 'starting', 'progress': 0, 'total': 0, 'error': None}
+        t = threading.Thread(target=_assemble_lighttube_stream, args=(version, video_id), daemon=True)
+        t.start()
+    return _stream_get_build(key)
 
 
 def _lcai_gas_price():
@@ -1331,6 +1519,89 @@ def lighttube_upload_progress(job_id):
     return jsonify(job)
 
 
+@app.route('/api/media/stream/lighttube/<version>/<int:video_id>/status', methods=['GET'])
+def lighttube_stream_status(version, video_id):
+    """Poll relay-side assembly of a LightTube video for HTTP Range streaming."""
+    if version not in ('v2', 'v3'):
+        return jsonify({'error': 'version must be v2 or v3'}), 400
+    try:
+        contract_address = _lighttube_contract_for_version(version)
+        if not contract_address:
+            return jsonify({'error': f'LightTube {version} not configured'}), 400
+
+        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+        total    = int(_get_video_total_chunks_on_chain(w3_local, contract_address, video_id))
+        if total <= 0:
+            return jsonify({'error': 'Video has no chunks'}), 404
+
+        out_path, meta_path = _stream_paths(version, video_id)
+        if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+            meta = _stream_load_meta(meta_path) or {}
+            return jsonify({
+                'status':   'ready',
+                'progress': total,
+                'total':    total,
+                'mime':     meta.get('mime', 'video/mp4'),
+            })
+
+        key   = _stream_cache_key(version, video_id)
+        build = _stream_get_build(key)
+        if not build or build.get('status') not in ('building', 'ready', 'starting'):
+            _ensure_stream_build_started(version, video_id)
+            build = _stream_get_build(key) or {}
+
+        if build.get('status') == 'error':
+            return jsonify({
+                'status':   'error',
+                'progress': build.get('progress', 0),
+                'total':    total,
+                'error':    build.get('error', 'Build failed'),
+            }), 500
+
+        return jsonify({
+            'status':   build.get('status', 'building'),
+            'progress': build.get('progress', 0),
+            'total':    total,
+            'mime':     build.get('mime', 'video/mp4'),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/media/stream/lighttube/<version>/<int:video_id>', methods=['GET', 'HEAD'])
+def lighttube_stream_media(version, video_id):
+    """Stream assembled LightTube video with HTTP Range support (plain video src)."""
+    if version not in ('v2', 'v3'):
+        return jsonify({'error': 'version must be v2 or v3'}), 400
+    try:
+        out_path, meta_path = _stream_paths(version, video_id)
+        if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 0):
+            contract_address = _lighttube_contract_for_version(version)
+            if not contract_address:
+                return jsonify({'error': f'LightTube {version} not configured'}), 400
+            w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+            total    = int(_get_video_total_chunks_on_chain(w3_local, contract_address, video_id))
+            _ensure_stream_build_started(version, video_id)
+            build    = _stream_get_build(_stream_cache_key(version, video_id)) or {}
+            return jsonify({
+                'error':    'Stream not ready',
+                'status':   build.get('status', 'building'),
+                'progress': build.get('progress', 0),
+                'total':    total,
+            }), 503
+
+        meta = _stream_load_meta(meta_path) or {}
+        mime = meta.get('mime', 'video/mp4')
+        return send_file(
+            out_path,
+            mimetype=mime,
+            conditional=True,
+            download_name=f'lighttube-{version}-{video_id}.mp4',
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ─── LightTube thumbnail endpoints ───────────────────────────────────────────
 
 @app.route('/api/lighttube/thumb/<version>/<video_id>', methods=['GET'])
@@ -1493,6 +1764,8 @@ def health():
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
         'lighttube_repair_fix': 'lcai-penny-gas',
+        'lighttube_stream':    'range-cache-v1',
+        'lighttube_stream_cache_dir': LT_STREAM_CACHE_DIR,
         'lighttube_gas_price_wei': LT_CHUNK_GAS_PRICE_WEI,
         'chain_id':            CHAIN_ID,
     })
@@ -2049,9 +2322,11 @@ def lighttube_set_override():
 
 @app.route('/api/orcavault/hidden', methods=['GET'])
 def orcavault_get_hidden():
-    """Public endpoint — returns list of hidden OrcaVault memory IDs."""
+    """Public endpoint — returns hidden IDs, permanently removed IDs, and banned wallets."""
     hidden = load_orcavault_hidden()
-    return jsonify({'hidden': list(hidden)})
+    perm   = get_ov_permanent_hidden()
+    banned = get_ov_banned_wallets()
+    return jsonify({'hidden': list(hidden), 'perm_removed': list(perm), 'banned_wallets': list(banned)})
 
 @app.route('/api/orcavault/hide', methods=['POST'])
 def orcavault_hide():
@@ -2150,6 +2425,113 @@ def orcavault_creator_delete():
     hidden.add(str(memory_id))
     save_orcavault_hidden(hidden)
     return jsonify({'success': True})
+
+# ─── OrcaVault 3-level moderation (GitHub-backed, survives all redeploys) ──────
+
+ORCAVAULT_GITHUB_REPO   = "Keiko-Dev-LCAI/orcavault"
+ORCAVAULT_GITHUB_BRANCH = "main"
+
+_ov_perm_hidden_cache    = None
+_ov_banned_wallets_cache = None
+
+def get_ov_permanent_hidden():
+    """Return OrcaVault permanently removed memory IDs. Loaded once per process startup."""
+    global _ov_perm_hidden_cache
+    if _ov_perm_hidden_cache is None:
+        from_github = _github_read_json_repo(ORCAVAULT_GITHUB_REPO, ORCAVAULT_GITHUB_BRANCH, "moderation/perm_removed.json") or []
+        _ov_perm_hidden_cache = set(str(x) for x in from_github)
+    return _ov_perm_hidden_cache
+
+def add_ov_permanent_hidden(memory_id):
+    """Permanently remove an OrcaVault memory. Writes to GitHub in background."""
+    perm = get_ov_permanent_hidden()
+    perm.add(str(memory_id))
+    snapshot = list(perm)
+    threading.Thread(
+        target=_github_write_json_repo,
+        args=(ORCAVAULT_GITHUB_REPO, ORCAVAULT_GITHUB_BRANCH, "moderation/perm_removed.json", snapshot, f"Permanently remove memory {memory_id}"),
+        daemon=True
+    ).start()
+
+def get_ov_banned_wallets():
+    """Return OrcaVault permanently banned wallet addresses. Loaded once per process startup."""
+    global _ov_banned_wallets_cache
+    if _ov_banned_wallets_cache is None:
+        from_github = _github_read_json_repo(ORCAVAULT_GITHUB_REPO, ORCAVAULT_GITHUB_BRANCH, "moderation/banned_wallets.json") or []
+        _ov_banned_wallets_cache = set(w.lower() for w in from_github)
+    return _ov_banned_wallets_cache
+
+def add_ov_banned_wallet(wallet):
+    """Permanently ban a wallet from OrcaVault. Writes to GitHub in background."""
+    banned = get_ov_banned_wallets()
+    banned.add(wallet.lower())
+    snapshot = list(banned)
+    threading.Thread(
+        target=_github_write_json_repo,
+        args=(ORCAVAULT_GITHUB_REPO, ORCAVAULT_GITHUB_BRANCH, "moderation/banned_wallets.json", snapshot, f"Ban wallet {wallet[:10]}"),
+        daemon=True
+    ).start()
+
+@app.route('/api/orcavault/perm-remove', methods=['POST'])
+def orcavault_perm_remove():
+    """Admin — permanently remove an OrcaVault memory. GitHub-backed, survives all redeploys.
+    Body: { memoryId: "N", adminKey: "secret" }"""
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    if body.get('adminKey') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    memory_id = body.get('memoryId')
+    if memory_id is None:
+        return jsonify({'error': 'memoryId required'}), 400
+    add_ov_permanent_hidden(str(memory_id))
+    # Also add to temp hidden so it disappears immediately (before GitHub write completes)
+    hidden = load_orcavault_hidden()
+    hidden.add(str(memory_id))
+    save_orcavault_hidden(hidden)
+    print(f"[ORCAVAULT MOD] Permanently removed memory {memory_id}")
+    return jsonify({'success': True, 'message': f'Memory {memory_id} permanently removed'})
+
+@app.route('/api/orcavault/ban-wallet', methods=['POST'])
+def orcavault_ban_wallet():
+    """Admin — permanently ban a wallet + optionally permanently remove their memory.
+    Body: { wallet: '0x...', memoryId: 'N' (optional), adminKey: 'secret' }"""
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    if body.get('adminKey') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    wallet_addr = body.get('wallet', '').strip().lower()
+    memory_id   = body.get('memoryId')
+    if not wallet_addr:
+        return jsonify({'error': 'wallet required'}), 400
+    add_ov_banned_wallet(wallet_addr)
+    if memory_id is not None:
+        add_ov_permanent_hidden(str(memory_id))
+        hidden = load_orcavault_hidden()
+        hidden.add(str(memory_id))
+        save_orcavault_hidden(hidden)
+    print(f"[ORCAVAULT MOD] Banned wallet {wallet_addr[:10]}... memory={memory_id or 'none'}")
+    return jsonify({
+        'success': True,
+        'message': f'Wallet banned forever. Memory {"permanently removed" if memory_id is not None else "not changed"}.'
+    })
+
+@app.route('/api/orcavault/moderation-lists', methods=['GET'])
+def orcavault_moderation_lists():
+    """Admin — return permanent removed IDs and banned wallets. Admin key required."""
+    admin_key = request.args.get('adminKey', '')
+    if not LIGHTTUBE_ADMIN_KEY or admin_key != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({
+        'temp_hidden':    list(load_orcavault_hidden()),
+        'perm_removed':   list(get_ov_permanent_hidden()),
+        'banned_wallets': list(get_ov_banned_wallets()),
+    })
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LIGHTTUNES
