@@ -1024,6 +1024,7 @@ footer a{color:var(--gold);text-decoration:none}
     <button class="cat-btn" onclick="selectBrowseCat('audio',this)">🎵 Audio</button>
     <button class="cat-btn" onclick="selectBrowseCat('text',this)">📝 Text</button>
     <button class="cat-btn" onclick="selectBrowseCat('document',this)">📄 Documents</button>
+    <button class="cat-btn" onclick="selectBrowseCat('website',this)">🔗 Websites</button>
   </div>
   <div class="browse-grid-wrap">
     <div id="browse-loading" style="text-align:center;padding:60px 20px;font-size:22px;color:var(--muted)">⏳ Loading public memories…</div>
@@ -1958,7 +1959,7 @@ function renderMemoriesGrid() {
     const isHidden = hiddenMemories.has(String(m.idx));
     if (isHidden && !isAdmin) return; // non-admins never see hidden memories
     if (!isMemoryVisibleToViewer(m)) return; // non-owners don't see private memories
-    const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄'};
+    const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄',website:'🔗'};
     const icon = typeIcons[m.memType] || '📎';
     let thumbHtml = '';
     if (m.memType === 'photo' && m.dataURI && m.dataURI.startsWith('data:image')) {
@@ -2140,7 +2141,7 @@ async function loadAndShowMemory(vaultId, idx) {
       }
     }
 
-    const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄'};
+    const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄',website:'🔗'};
     document.getElementById('vm-title').textContent = mem.title;
     document.getElementById('vm-type-badge').textContent = (typeIcons[mem.memType]||'📎') + ' ' + capitalize(mem.memType);
     document.getElementById('vm-caption').textContent = mem.caption || '';
@@ -2193,6 +2194,13 @@ async function loadAndShowMemory(vaultId, idx) {
         <div style="font-size:80px;margin-bottom:16px">📄</div>
         <div style="font-size:20px;font-weight:700;margin-bottom:20px">${escHtml(mem.title)}</div>
         <a class="btn btn-gold" href="${escHtml(mem.dataURI)}" download="${escHtml(mem.title)}">⬇️ Download Document</a>
+      </div>`;
+    } else if (mem.memType === 'website') {
+      const url = mem.dataURI || '';
+      mediaHtml += `<div style="text-align:center;padding:60px 20px">
+        <div style="font-size:80px;margin-bottom:16px">🔗</div>
+        <div style="font-size:20px;font-weight:700;margin-bottom:20px">${escHtml(mem.title)}</div>
+        ${url ? `<a class="btn btn-gold" href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">🌐 Visit Archived URL</a>` : ''}
       </div>`;
     }
     if (mem.date) {
@@ -3430,7 +3438,7 @@ function renderBrowseGrid(cat) {
     contentEl.innerHTML = `<div class="browse-empty">No public ${cat === 'all' ? '' : cat + ' '}memories found yet.<br><span style="font-size:18px">Be the first to share one! 🐬</span></div>`;
     return;
   }
-  const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄'};
+  const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄',website:'🔗'};
   let html = '<div class="memory-grid">';
   filtered.forEach(m => {
     const icon = typeIcons[m.memType] || '📎';
