@@ -542,6 +542,16 @@ footer a{color:var(--gold);text-decoration:none}
     <button class="btn btn-outline" style="padding:8px 18px;font-size:17px;min-height:auto;margin-left:8px" onclick="showScreen('recovery')">🔐 Recovery Info</button>
   </div>
 
+  <!-- ══ FOOTER — HOME PAGE ONLY ══ -->
+  <div style="text-align:center;padding:12px 56px 4px;font-size:18px;color:var(--muted);line-height:1.65;border-top:1px solid var(--border);margin:0 40px">
+    Free to browse · Uploads require a small LCAI fee · Content that violates community standards will be hidden from this app.<br>
+    All uploads are permanently recorded on the Lightchain blockchain and cannot be erased from the chain — only removed from this interface.
+  </div>
+  <div style="text-align:center;padding:8px 56px 16px;font-size:18px;display:flex;justify-content:center;gap:32px;flex-wrap:wrap">
+    <a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" style="color:#9b7fe8;text-decoration:none;font-weight:600;">𝕏 @KeikoDevLCAI</a>
+    <a href="#" onclick="(function(){navigator.clipboard.writeText('0xA3a653a8cBA0710ff57Ac34E2278C603B4259FD3').catch(function(){});window.open('https://orcamail.ai','_blank');var t=document.getElementById('_dctoast');if(t){t.style.display='block';setTimeout(function(){t.style.display='none'},3000);}})();return false;" style="color:#6c47ff;font-weight:600;text-decoration:none;">Questions? Contact Developer via OrcaMail 🐬</a>
+  </div>
+
   <!-- ══ RECOVERY INFO CARD — LANDING (hidden — moved to screen-recovery) ══ -->
   <div class="recovery-section" style="display:none">
     <div class="recovery-card">
@@ -1010,14 +1020,6 @@ footer a{color:var(--gold);text-decoration:none}
   </div>
   <div style="text-align:center;padding-bottom:40px">
     <button class="btn btn-outline" onclick="showScreen('landing')" style="font-size:18px">🏠 Back to Home</button>
-  </div>
-  <div style="text-align:center;padding:8px 16px 4px;font-size:18px;color:var(--text);line-height:1.65;border-top:1px solid var(--border);margin:0 16px">
-    Free to browse · Uploads require a small LCAI fee · Content that violates community standards will be hidden from this app.<br>
-    All uploads are permanently recorded on the Lightchain blockchain and cannot be erased from the chain — only removed from this interface.
-  </div>
-  <div style="text-align:center;padding:8px 16px 8px;font-size:18px;display:flex;justify-content:center;gap:32px;flex-wrap:wrap">
-    <a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" style="color:#9b7fe8;text-decoration:none;font-weight:600;">𝕏 @KeikoDevLCAI</a>
-    <a href="#" onclick="(function(){navigator.clipboard.writeText('0xA3a653a8cBA0710ff57Ac34E2278C603B4259FD3').catch(function(){});window.open('https://orcamail.ai','_blank');var t=document.getElementById('_dctoast');if(t){t.style.display='block';setTimeout(function(){t.style.display='none'},3000);}})();return false;" style="color:#6c47ff;font-weight:600;text-decoration:none;">Questions? Contact Developer via OrcaMail 🐬</a>
   </div>
 </div>
 
