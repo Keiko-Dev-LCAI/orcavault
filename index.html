@@ -486,6 +486,7 @@ footer a{color:var(--gold);text-decoration:none}
     </div>
   </a>
   <div class="nav-spacer"></div>
+  <a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" style="font-size:16px;color:var(--purple);text-decoration:none;font-weight:700;white-space:nowrap;flex-shrink:0">𝕏 @KeikoDevLCAI</a>
   <span id="nav-wallet-addr" class="nav-wallet-addr" style="display:none"></span>
   <button class="nav-btn nav-btn-outline" id="btn-my-archives" onclick="goMyArchives()" style="display:none">📂 My Archives</button>
   <button class="nav-btn nav-btn-outline" onclick="showBrowseScreen()">🌐 Browse</button>
@@ -541,16 +542,6 @@ footer a{color:var(--gold);text-decoration:none}
   <div style="text-align:center;padding:16px 56px 8px;font-size:18px;color:var(--muted)">
     Gas costs ~$0.000015 per photo · No monthly fees ever ·
     <button class="btn btn-outline" style="padding:8px 18px;font-size:17px;min-height:auto;margin-left:8px" onclick="showScreen('recovery')">🔐 Recovery Info</button>
-  </div>
-
-  <!-- ══ FOOTER — HOME PAGE ONLY ══ -->
-  <div style="text-align:center;padding:12px 56px 4px;font-size:18px;color:var(--muted);line-height:1.65;border-top:1px solid var(--border);margin:0 40px">
-    Free to browse · Uploads require a small LCAI fee · Content that violates community standards will be hidden from this app.<br>
-    All uploads are permanently recorded on the Lightchain blockchain and cannot be erased from the chain — only removed from this interface.
-  </div>
-  <div style="text-align:center;padding:8px 56px 16px;font-size:18px;display:flex;justify-content:center;gap:32px;flex-wrap:wrap">
-    <a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" style="color:#9b7fe8;text-decoration:none;font-weight:600;">𝕏 @KeikoDevLCAI</a>
-    <a href="#" onclick="(function(){navigator.clipboard.writeText('0xA3a653a8cBA0710ff57Ac34E2278C603B4259FD3').catch(function(){});window.open('https://orcamail.ai','_blank');var t=document.getElementById('_dctoast');if(t){t.style.display='block';setTimeout(function(){t.style.display='none'},3000);}})();return false;" style="color:#6c47ff;font-weight:600;text-decoration:none;">Questions? Contact Developer via OrcaMail 🐬</a>
   </div>
 
   <!-- ══ RECOVERY INFO CARD — LANDING (hidden — moved to screen-recovery) ══ -->
@@ -634,20 +625,18 @@ footer a{color:var(--gold);text-decoration:none}
      SCREEN: RECOVERY INFO
 ══════════════════════════════════════════════ -->
 <div id="screen-recovery" class="screen">
-  <div class="recovery-section" style="min-height:calc(100vh - 160px)">
+  <div class="recovery-section" style="padding:20px 40px">
     <div class="recovery-card">
-      <div style="font-size:52px;margin-bottom:16px">🔐</div>
-      <h2 class="recovery-card-title" style="font-size:38px">Your Time Capsule is Forever</h2>
-      <p class="recovery-card-subtitle">Even if this website disappears someday — your time capsule lives on the blockchain, safe forever.</p>
-      <p class="recovery-card-body" style="margin-bottom:32px">Your photos, videos, and stories are stored directly on the Lightchain blockchain — a permanent public record that nobody can erase, not even us. This app is just a friendly window to view them. If the window breaks, the memories behind it are still there.<br><br>To get your memories back without this app, you need three things. <strong style="color:var(--gold)">Save them all somewhere safe — your phone's notes app, a printed piece of paper, an email to yourself.</strong></p>
+      <h2 class="recovery-card-title" style="font-size:28px;margin-bottom:8px">🔐 Your Time Capsule is Forever</h2>
+      <p class="recovery-card-subtitle" style="margin-bottom:12px">Even if this website disappears — your memories live on the blockchain forever. Save these 3 things now so you can always find them.</p>
+
+      <div style="font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px">What you need to save:</div>
 
       <!-- Item 1: Contract address -->
-      <div style="font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px">What you need to save:</div>
       <div class="recovery-item">
         <div class="recovery-item-inner">
-          <div class="recovery-item-label">1. Contract Address — where all archives are stored on the blockchain</div>
+          <div class="recovery-item-label">1. Contract Address — where all archives are stored</div>
           <div class="recovery-item-value" id="recovery-contract-addr">0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e</div>
-          <div style="font-size:18px;color:var(--muted);margin-top:8px">This is the same for everyone — it's the address of the shared vault on Lightchain.</div>
         </div>
         <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-contract-addr', this)">📋 Copy</button>
       </div>
@@ -655,25 +644,23 @@ footer a{color:var(--gold);text-decoration:none}
       <!-- Item 2: Vault number -->
       <div class="recovery-item" id="recovery-vault-row" style="display:none">
         <div class="recovery-item-inner">
-          <div class="recovery-item-label">2. Your Vault Number — assigned when you created your archive</div>
+          <div class="recovery-item-label">2. Your Vault Number</div>
           <div class="recovery-item-value-plain" id="recovery-vault-id" style="font-size:28px;color:var(--gold)">—</div>
-          <div style="font-size:18px;color:var(--muted);margin-top:8px">This is the number that identifies your specific archive. Write it down!</div>
         </div>
         <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-vault-id', this)">📋 Copy</button>
       </div>
       <div class="recovery-item" id="recovery-vault-row-placeholder" style="background:rgba(255,255,255,0.03);border-style:dashed">
         <div class="recovery-item-inner">
           <div class="recovery-item-label">2. Your Vault Number</div>
-          <div class="recovery-item-value-plain" style="color:var(--muted)">Create an archive first — then come back here and your vault number will appear.</div>
+          <div class="recovery-item-value-plain" style="color:var(--muted)">Create an archive first — then it appears here.</div>
         </div>
       </div>
 
       <!-- Item 3: Wallet address -->
       <div class="recovery-item recovery-wallet-row" id="recovery-wallet-row">
         <div class="recovery-item-inner">
-          <div class="recovery-item-label">3. Your Wallet Address — proves that you own this archive</div>
+          <div class="recovery-item-label">3. Your Wallet Address — proves you own this archive</div>
           <div class="recovery-item-value" id="recovery-wallet-addr">—</div>
-          <div style="font-size:18px;color:var(--muted);margin-top:8px">This is your unique wallet address. It's public — anyone can see it, but only you can use it.</div>
         </div>
         <button class="recovery-copy-btn" onclick="recoveryCopy('recovery-wallet-addr', this)">📋 Copy</button>
       </div>
@@ -684,16 +671,7 @@ footer a{color:var(--gold);text-decoration:none}
         </div>
       </div>
 
-      <!-- Plain English explanation -->
-      <div class="recovery-note" style="margin-top:32px">
-        <strong style="font-size:22px;display:block;margin-bottom:12px;color:var(--gold)">How to use these to get your memories back:</strong>
-        <p style="margin-bottom:12px">1. Go to any Lightchain blockchain explorer — for example, <strong style="color:var(--text)">mainnet.lightscan.app</strong></p>
-        <p style="margin-bottom:12px">2. Search for the contract address above. You'll see a list of every archive ever created.</p>
-        <p style="margin-bottom:12px">3. Find the event logs for your vault number. Each memory you stored is a permanent log entry — your photo or video is right there, encoded in the transaction data.</p>
-        <p style="color:var(--muted)">This is a lot of technical steps — but the point is, <strong style="color:var(--text)">it's always possible.</strong> Your memories are not locked inside this app. They belong to the blockchain and to you, forever.</p>
-      </div>
-
-      <div style="margin-top:32px;text-align:center">
+      <div style="margin-top:16px;text-align:center">
         <button class="btn btn-outline" onclick="showScreen('landing')" style="font-size:18px">← Back to Home</button>
       </div>
     </div>
