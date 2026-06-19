@@ -1948,7 +1948,6 @@ function renderMemoriesGrid() {
     const chainRow = `<div class="chain-link-row">
       <button class="chain-link-btn" onclick="event.stopPropagation();copyMemoryLink('${shareUrl}',this)" style="background:rgba(232,184,75,0.15);border-color:var(--gold);color:var(--gold);font-weight:700">📤 Share</button>
       ${m.txHash ? `<a class="chain-link-btn" href="${LIGHTSCAN_TX}${m.txHash}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔗 Chain</a>` : ''}
-      ${m._isChunked ? `<span class="chunked-badge">⛓ ${m._totalChunks} chunks</span>` : ''}
       ${hiddenBadge}
       ${adminBtn}
     </div>`;
@@ -3469,7 +3468,6 @@ function renderBrowseGrid(cat) {
         <div class="memory-type-badge">${icon} ${capitalize(m.memType)}</div>
         <div class="memory-card-title">${escHtml(m.title)}</div>
         ${dateStr ? `<div class="memory-card-date">${dateStr}</div>` : ''}
-        ${m._totalChunks ? `<div style="font-size:14px;color:var(--muted);margin-top:2px">${m._totalChunks} chunks</div>` : ''}
         <div style="font-size:14px;color:var(--muted);margin-top:4px">Archive #${m.vaultId}</div>
       </div>
       <div class="chain-link-row">
