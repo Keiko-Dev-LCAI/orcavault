@@ -482,7 +482,7 @@ footer a{color:var(--gold);text-decoration:none}
     <span class="nav-logo-icon">🎞️</span>
     <div>
       <div class="nav-logo-text">Lightchain Archives</div>
-      <div class="nav-logo-sub">Your Personal Time Capsule · On-Chain Forever</div>
+      <div class="nav-logo-sub">Your Memories, Public or Private · On-Chain Forever</div>
     </div>
   </a>
   <div class="nav-spacer"></div>
@@ -886,10 +886,13 @@ footer a{color:var(--gold);text-decoration:none}
     <!-- Visibility -->
     <div class="form-group">
       <label class="form-label">👁️ Visibility</label>
-      <span class="form-sublabel">Public memories appear on your shareable vault page. Private memories are only visible to you.</span>
+      <span class="form-sublabel">Public memories appear in your shareable vault page and the public browse. Private memories are only visible to you when signed in.</span>
       <div class="vis-toggle">
         <button class="vis-btn" id="vis-public-btn" onclick="setVisibility('public')">🌐 Public</button>
         <button class="vis-btn active-private" id="vis-private-btn" onclick="setVisibility('private')">🔒 Private (Only Me)</button>
+      </div>
+      <div style="margin-top:10px;padding:12px 16px;background:rgba(155,127,232,0.08);border:1px solid rgba(155,127,232,0.25);border-radius:10px;font-size:16px;color:var(--muted);line-height:1.6">
+        ⚠️ <strong style="color:var(--text)">Important:</strong> Regardless of this setting, your file is stored permanently on the Lightchain blockchain — a public distributed ledger. <strong>Private</strong> means hidden from this app's public view, not erased from the chain. You can change this setting at any time after uploading.
       </div>
       <div class="vis-ack" id="vis-ack-wrap" style="display:none">
         <label>
@@ -1119,7 +1122,8 @@ footer a{color:var(--gold);text-decoration:none}
         <li style="margin-bottom:6px">Copyrighted material you do not have rights to share</li>
         <li style="margin-bottom:6px">Content intended to harass, threaten, or harm others</li>
       </ul>
-      <p style="margin-bottom:14px"><strong>All uploads are permanent and public.</strong> Your wallet address is permanently linked to everything you store. There is no way to delete content from the blockchain.</p>
+      <p style="margin-bottom:14px"><strong>All uploads are permanent.</strong> Your wallet address is permanently linked to everything you store. There is no way to delete content from the blockchain.</p>
+      <p style="margin-bottom:14px"><strong style="color:var(--purple)">🔒 About Private memories:</strong> Marking a memory Private hides it from the public archive and browse view in this app. Only your connected wallet will see it here. However, <strong>all data is permanently stored on the Lightchain blockchain</strong> — a public distributed ledger. Anyone who queries the blockchain directly can access the raw data. Private in this app means <em>hidden from Lightchain Archives</em>, not erased from the chain. Do not upload anything you would never want on a public ledger.</p>
       <p style="color:var(--muted);font-size:17px">By using this app you accept sole responsibility for all content you upload. The developer of Lightchain Archives bears no liability for user-submitted content.</p>
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
@@ -1332,6 +1336,7 @@ let isAdmin             = false;
 let hiddenMemories      = new Set();
 let permRemovedMemories = new Set();
 let bannedWallets       = new Set();
+let visibilityOverrides = {};   // { memoryIdx_str: { setter: wallet, visibility: 'public'|'private' } }
 let _ovAdminKey         = null;
 let contractV3          = null;    // signer V3 contract
 
@@ -1349,10 +1354,12 @@ async function loadOVHidden() {
     hiddenMemories      = new Set((data.hidden        || []).map(String));
     permRemovedMemories = new Set((data.perm_removed  || []).map(String));
     bannedWallets       = new Set((data.banned_wallets|| []).map(w => w.toLowerCase()));
+    visibilityOverrides = data.visibility_overrides || {};
   } catch(e) {
     hiddenMemories      = new Set();
     permRemovedMemories = new Set();
     bannedWallets       = new Set();
+    visibilityOverrides = {};
   }
 }
 
@@ -1953,14 +1960,27 @@ function renderMemoriesGrid() {
       ${hiddenBadge}
       ${adminBtn}
     </div>`;
-    const privateBadge = m._private ? `<span class="private-badge">🔒 Private</span>` : '';
-    html += `<div class="memory-card" onclick="viewMemory(${m.idx})" style="${m._private ? 'border-color:rgba(155,127,232,0.4)' : ''}">
+    // Compute effective privacy — relay override takes priority over on-chain prefix
+    const memCreator    = m.addedBy ? m.addedBy.toLowerCase() : '';
+    const ov            = visibilityOverrides[String(m.idx)];
+    const ovApplies     = ov && ov.setter && ov.setter.toLowerCase() === memCreator;
+    const effectivePriv = ovApplies ? (ov.visibility === 'private') : m._private;
+    const isMyMemory    = wallet && wallet.toLowerCase() === memCreator;
+    const privateBadge  = effectivePriv ? `<span class="private-badge">🔒 Private</span>` : '';
+    const visToggleBtn  = isMyMemory
+      ? `<button onclick="event.stopPropagation();toggleMemoryVisibility(${m.idx},'${effectivePriv ? 'private' : 'public'}','${escHtml(m.addedBy)}')"
+           style="margin-top:8px;width:100%;padding:8px 0;border-radius:8px;border:1.5px solid ${effectivePriv ? 'rgba(0,212,255,0.35)' : 'rgba(155,127,232,0.35)'};background:${effectivePriv ? 'rgba(0,212,255,0.08)' : 'rgba(155,127,232,0.08)'};color:${effectivePriv ? 'var(--cyan)' : 'var(--purple)'};font-size:15px;font-weight:700;cursor:pointer;font-family:inherit">
+           ${effectivePriv ? '🌐 Make Public' : '🔒 Make Private'}
+         </button>`
+      : '';
+    html += `<div class="memory-card" onclick="viewMemory(${m.idx})" style="${effectivePriv ? 'border-color:rgba(155,127,232,0.4)' : ''}">
       ${cardThumb}
       <div class="memory-card-body">
         <div class="memory-type-badge">${icon} ${capitalize(m.memType)}</div>
         ${privateBadge}
         <div class="memory-card-title">${escHtml(m.title)}</div>
         ${dateStr ? `<div class="memory-card-date">${dateStr}</div>` : ''}
+        ${visToggleBtn}
       </div>
       ${chainRow}
     </div>`;
@@ -3157,6 +3177,57 @@ function setVisibility(v) {
 
 function onAckChange() { /* acknowledgement checkbox — no action needed, checked inline */ }
 
+// ════════════════════════════════════════════════════════
+//  🔒 VISIBILITY TOGGLE — change public/private on existing memories
+// ════════════════════════════════════════════════════════
+async function toggleMemoryVisibility(memIdx, currentVis, addedBy) {
+  if (!wallet) { showToast('Connect your wallet first'); return; }
+  if (wallet.toLowerCase() !== (addedBy || '').toLowerCase()) {
+    showToast('Only the creator can change visibility'); return;
+  }
+  const newVis  = currentVis === 'private' ? 'public' : 'private';
+  const message = `Set OrcaVault memory ${memIdx} visibility to ${newVis}`;
+  // Show what this means before asking them to sign
+  if (newVis === 'public') {
+    const ok = confirm(
+      'Make this memory PUBLIC?\n\n' +
+      'It will appear in your shareable vault page and the public browse view.\n\n' +
+      'Note: all uploads are permanently stored on the Lightchain blockchain. ' +
+      'This setting only controls what Lightchain Archives displays.'
+    );
+    if (!ok) return;
+  } else {
+    const ok = confirm(
+      'Make this memory PRIVATE?\n\n' +
+      'It will be hidden from public view — only you (signed in with your wallet) can see it here.\n\n' +
+      'Note: the data remains on the Lightchain blockchain. Anyone who queries the blockchain directly ' +
+      'can still access the raw data. Private = hidden from this app, not erased from the chain.'
+    );
+    if (!ok) return;
+  }
+  try {
+    const provider  = new ethers.BrowserProvider(window.ethereum);
+    const signer    = await provider.getSigner();
+    const signature = await signer.signMessage(message);
+    const resp = await fetch(`${RELAY_URL}/api/orcavault/set-visibility`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memoryIdx: String(memIdx), wallet, signature, message, visibility: newVis })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      visibilityOverrides[String(memIdx)] = { setter: wallet.toLowerCase(), visibility: newVis };
+      showToast(newVis === 'private' ? '🔒 Set to Private' : '🌐 Set to Public');
+      renderMemoriesGrid();
+    } else {
+      showToast('Error: ' + (data.error || 'Could not update visibility'));
+    }
+  } catch(e) {
+    if (e.code === 4001 || (e.message && e.message.includes('rejected'))) { showToast('Cancelled'); return; }
+    showToast('Error: ' + (e.message || 'Unknown error'));
+  }
+}
+
 function buildCaption(rawCaption) {
   // Prepend private prefix if needed
   return currentVisibility === 'private' ? PRIV_PREFIX + rawCaption : rawCaption;
@@ -3176,7 +3247,12 @@ function isMemoryVisibleToViewer(mem) {
   if (mem.addedBy && bannedWallets.has(mem.addedBy.toLowerCase())) return false;
   // Always visible to the vault owner (connected wallet)
   if (wallet && currentVaultData && wallet.toLowerCase() === currentVaultData.owner.toLowerCase()) return true;
-  // Visible if not private
+  // Check for a relay-side visibility override set by the memory creator
+  const ov = visibilityOverrides[String(mem.idx)];
+  if (ov && ov.setter && mem.addedBy && ov.setter.toLowerCase() === mem.addedBy.toLowerCase()) {
+    return ov.visibility === 'public';
+  }
+  // Fall back to on-chain privacy prefix
   return !mem._private;
 }
 
@@ -3596,5 +3672,11 @@ function confirmUploadWarning() {
 }
 </script>
 <div id="_dctoast" style="display:none;position:fixed;bottom:24px;right:24px;background:#6c47ff;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 2px 16px rgba(0,0,0,.4);">Wallet copied! Opening OrcaMail&#x2026;</div>
+
+<footer>
+  Free to browse · Uploads require a small gas fee in LCAI · Content that violates community standards may be removed from this app
+  · <button onclick="document.getElementById('modal-terms').classList.remove('hidden')" style="background:none;border:none;color:var(--gold);cursor:pointer;font-size:17px;text-decoration:underline;font-family:inherit;padding:0">Terms of Use</button>
+  <br><span style="font-size:15px">⚠️ All uploads are permanently recorded on the Lightchain blockchain and cannot be erased from the chain — only hidden from this interface. Private memories are hidden from this app but remain accessible on-chain by anyone querying the blockchain directly.</span>
+</footer>
 </body>
 </html>
