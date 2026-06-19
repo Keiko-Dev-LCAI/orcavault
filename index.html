@@ -433,6 +433,36 @@ footer a{color:var(--gold);text-decoration:none}
 
 /* ── PRIVATE BADGE ── */
 .private-badge{display:inline-flex;align-items:center;gap:6px;font-size:15px;font-weight:700;padding:5px 12px;border-radius:8px;background:rgba(155,127,232,0.15);color:var(--purple);border:1px solid rgba(155,127,232,0.3);margin-bottom:10px}
+
+/* ── PUBLIC BROWSE ── */
+.browse-hero{padding:48px 56px 32px;background:linear-gradient(160deg,#0d1528 0%,#0d0b18 60%,#0d1820 100%)}
+.browse-cats{display:flex;gap:10px;flex-wrap:wrap;padding:0 56px 24px;border-bottom:1px solid var(--border)}
+.cat-btn{padding:11px 22px;border-radius:30px;border:1.5px solid var(--border);background:transparent;color:var(--muted);font-size:18px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .15s}
+.cat-btn:hover{border-color:var(--gold);color:var(--gold)}
+.cat-btn.active{background:var(--gold);color:#0d0b18;border-color:var(--gold)}
+.browse-grid-wrap{padding:32px 56px 56px}
+.browse-grid-title{font-size:24px;font-weight:800;color:var(--muted);margin-bottom:18px;text-transform:uppercase;letter-spacing:.06em}
+.browse-section{margin-bottom:48px}
+.browse-empty{text-align:center;padding:80px 40px;color:var(--muted);font-size:22px}
+@media(max-width:700px){.browse-hero{padding:32px 20px 24px}.browse-cats{padding:0 14px 18px;gap:8px}.browse-grid-wrap{padding:24px 14px 40px}.cat-btn{padding:9px 16px;font-size:16px}}
+
+/* ── UPLOAD WARNING MODAL ── */
+.upload-warn-modal{background:var(--bg2);border:2px solid var(--red);border-radius:20px;padding:36px;max-width:560px;width:100%;max-height:92vh;overflow-y:auto}
+.upload-warn-icon{font-size:56px;text-align:center;margin-bottom:16px}
+.upload-warn-title{font-size:28px;font-weight:900;color:var(--red);text-align:center;margin-bottom:8px}
+.upload-warn-body{font-size:18px;color:var(--text);line-height:1.7;margin-bottom:20px;background:rgba(232,82,82,0.06);border-radius:12px;padding:18px 20px;border-left:4px solid var(--red)}
+.upload-warn-checks{display:flex;flex-direction:column;gap:14px;margin-bottom:24px}
+.upload-warn-check{display:flex;align-items:flex-start;gap:12px;font-size:18px;color:var(--text);cursor:pointer;line-height:1.55}
+.upload-warn-check input{width:22px;height:22px;flex-shrink:0;margin-top:2px;accent-color:var(--red);cursor:pointer}
+
+/* ── ADMIN 3-LEVEL MOD ── */
+.admin-mod-wrap{position:relative;display:inline-block}
+.admin-mod-menu{position:absolute;right:0;bottom:100%;margin-bottom:4px;background:var(--bg2);border:1.5px solid rgba(232,82,82,0.5);border-radius:10px;overflow:hidden;z-index:100;min-width:160px;box-shadow:0 4px 20px rgba(0,0,0,0.5)}
+.admin-mod-menu.hidden{display:none}
+.admin-mod-item{display:block;width:100%;padding:12px 16px;border:none;background:transparent;color:var(--text);font-size:16px;font-weight:700;cursor:pointer;text-align:left;font-family:inherit;transition:background .12s;white-space:nowrap}
+.admin-mod-item:hover{background:rgba(232,82,82,0.15)}
+.admin-mod-item.restore{color:var(--green)}
+.admin-mod-item.restore:hover{background:rgba(82,201,127,0.15)}
 </style>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#f59e0b">
@@ -452,6 +482,7 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="nav-spacer"></div>
   <span id="nav-wallet-addr" class="nav-wallet-addr" style="display:none"></span>
   <button class="nav-btn nav-btn-outline" id="btn-my-archives" onclick="goMyArchives()" style="display:none">📂 My Archives</button>
+  <button class="nav-btn nav-btn-outline" onclick="showBrowseScreen()">🌐 Browse</button>
   <button class="nav-btn nav-btn-primary" id="btn-connect" onclick="connectWallet()">🔗 <span class="connect-label">Connect Wallet</span></button>
   <button class="nav-btn nav-btn-outline" id="btn-disconnect" onclick="disconnectWallet()" style="display:none">Disconnect</button>
 </nav>
@@ -468,6 +499,7 @@ footer a{color:var(--gold);text-decoration:none}
       <div class="hero-ctas">
         <button class="btn btn-gold" onclick="connectAndCreate()">🎞️ Create Your Archive</button>
         <button class="btn btn-outline" onclick="showViewVaultPrompt()">🔍 View an Archive</button>
+        <button class="btn btn-outline" onclick="showBrowseScreen()" style="border-color:var(--green);color:var(--green)">🌐 Browse Public Archives</button>
       </div>
     </div>
   </div>
@@ -882,10 +914,10 @@ footer a{color:var(--gold);text-decoration:none}
       <label class="form-label">👁️ Visibility</label>
       <span class="form-sublabel">Public memories appear on your shareable vault page. Private memories are only visible to you.</span>
       <div class="vis-toggle">
-        <button class="vis-btn active-public" id="vis-public-btn" onclick="setVisibility('public')">🌐 Public</button>
-        <button class="vis-btn" id="vis-private-btn" onclick="setVisibility('private')">🔒 Private (Only Me)</button>
+        <button class="vis-btn" id="vis-public-btn" onclick="setVisibility('public')">🌐 Public</button>
+        <button class="vis-btn active-private" id="vis-private-btn" onclick="setVisibility('private')">🔒 Private (Only Me)</button>
       </div>
-      <div class="vis-ack" id="vis-ack-wrap" style="display:block">
+      <div class="vis-ack" id="vis-ack-wrap" style="display:none">
         <label>
           <input type="checkbox" id="vis-ack-check" onchange="onAckChange()">
           I confirm this memory is appropriate for public viewing and I have the right to share it publicly.
@@ -976,6 +1008,32 @@ footer a{color:var(--gold);text-decoration:none}
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════════
+     SCREEN: PUBLIC BROWSE
+══════════════════════════════════════════════ -->
+<div id="screen-browse" class="screen">
+  <div class="browse-hero">
+    <div style="font-size:36px;margin-bottom:10px">🌐</div>
+    <h1 style="font-size:38px;font-weight:900;margin-bottom:8px">Browse Public Archives</h1>
+    <p style="font-size:20px;color:var(--muted);max-width:700px;margin:0">Public memories shared by the Lightchain community — photos, videos, stories, and more stored permanently on-chain.</p>
+  </div>
+  <div class="browse-cats" id="browse-cats">
+    <button class="cat-btn active" onclick="selectBrowseCat('all',this)">🌐 All</button>
+    <button class="cat-btn" onclick="selectBrowseCat('photo',this)">📸 Photos</button>
+    <button class="cat-btn" onclick="selectBrowseCat('video',this)">🎬 Videos</button>
+    <button class="cat-btn" onclick="selectBrowseCat('audio',this)">🎵 Audio</button>
+    <button class="cat-btn" onclick="selectBrowseCat('text',this)">📝 Text</button>
+    <button class="cat-btn" onclick="selectBrowseCat('document',this)">📄 Documents</button>
+  </div>
+  <div class="browse-grid-wrap">
+    <div id="browse-loading" style="text-align:center;padding:60px 20px;font-size:22px;color:var(--muted)">⏳ Loading public memories…</div>
+    <div id="browse-content" style="display:none"></div>
+  </div>
+  <div style="text-align:center;padding-bottom:40px">
+    <button class="btn btn-outline" onclick="showScreen('landing')" style="font-size:18px">🏠 Back to Home</button>
+  </div>
+</div>
+
 <!-- ── CHUNK CONFIRM MODAL ── -->
 <div id="modal-chunk-confirm" class="modal-overlay hidden">
   <div class="modal-box" style="max-width:520px">
@@ -1046,6 +1104,40 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="cam-use-btns" id="cam-use-btns" style="display:none">
     <button class="cam-use-btn cam-retake-btn" onclick="cameraRetake()">↩ Retake</button>
     <button class="cam-use-btn cam-confirm-btn" onclick="useCameraClip()">✅ Use This Clip</button>
+  </div>
+</div>
+
+<!-- ── UPLOAD WARNING MODAL ── -->
+<div id="modal-upload-warning" class="modal-overlay hidden">
+  <div class="upload-warn-modal">
+    <div class="upload-warn-icon">⚠️</div>
+    <div class="upload-warn-title">Before You Upload</div>
+    <div class="upload-warn-body">
+      <strong>What you upload to Lightchain Archives is permanent.</strong> Once stored on the blockchain, no one — not even us — can delete it. Your wallet address is permanently linked to everything you store.<br><br>
+      Please confirm you understand:
+    </div>
+    <div class="upload-warn-checks">
+      <label class="upload-warn-check">
+        <input type="checkbox" id="uwarn-check1" onchange="onUploadWarnChange()">
+        I understand this upload is <strong>permanent and cannot be deleted</strong> from the blockchain by anyone.
+      </label>
+      <label class="upload-warn-check">
+        <input type="checkbox" id="uwarn-check2" onchange="onUploadWarnChange()">
+        I confirm I have the <strong>right to share this content</strong> and it does not violate any copyright.
+      </label>
+      <label class="upload-warn-check">
+        <input type="checkbox" id="uwarn-check3" onchange="onUploadWarnChange()">
+        I confirm this content contains <strong>no illegal material</strong> (no CSAM, no threats, no content illegal under applicable law).
+      </label>
+      <label class="upload-warn-check">
+        <input type="checkbox" id="uwarn-check4" onchange="onUploadWarnChange()">
+        My <strong>wallet address will be publicly linked</strong> to this upload forever on the Lightchain blockchain.
+      </label>
+    </div>
+    <div style="display:flex;gap:12px">
+      <button class="btn btn-outline" onclick="document.getElementById('modal-upload-warning').classList.add('hidden')" style="flex:1;justify-content:center">Cancel</button>
+      <button class="btn btn-gold" id="uwarn-confirm-btn" disabled onclick="confirmUploadWarning()" style="flex:2;justify-content:center;font-size:18px;min-height:54px">✅ I Understand — Continue</button>
+    </div>
   </div>
 </div>
 
@@ -1264,7 +1356,7 @@ let vmQRGenerated    = false;
 let readContractV2   = null;   // read-only V2 contract
 let contractV2       = null;   // signer V2 contract
 let pendingChunkUpload = null; // { title, caption, date, dataURI, memType }
-const chunkCache     = new Map(); // memoryId (number) → assembled dataURI
+const chunkCache     = new Map(); // v2|v3-memoryId → relay stream URL or text payload
 
 // ── RELAY + V3 STATE ──
 let relayAccess     = false;   // has relay access (owner or paid)
@@ -1278,10 +1370,16 @@ const OV_ADMIN_WALLETS = [
   '0xa3a653a8cba0710ff57ac34e2278c603b4259fd3',
   '0x2b6b64cc13dd6d5acabcf3a5dd72b6ee8004de35',
 ];
-let isAdmin         = false;
-let hiddenMemories  = new Set();
-let _ovAdminKey     = null;
-let contractV3      = null;    // signer V3 contract
+let isAdmin             = false;
+let hiddenMemories      = new Set();
+let permRemovedMemories = new Set();
+let bannedWallets       = new Set();
+let _ovAdminKey         = null;
+let contractV3          = null;    // signer V3 contract
+
+// ── UPLOAD WARNING STATE ──
+let uploadWarningAccepted = false;
+let _uploadWarnCallback   = null;
 
 // ════════════════════════════════════════════════════════
 //  INIT
@@ -1290,8 +1388,14 @@ async function loadOVHidden() {
   try {
     const res = await fetch(`${RELAY_URL}/api/orcavault/hidden`);
     const data = await res.json();
-    hiddenMemories = new Set((data.hidden || []).map(String));
-  } catch(e) { hiddenMemories = new Set(); }
+    hiddenMemories      = new Set((data.hidden        || []).map(String));
+    permRemovedMemories = new Set((data.perm_removed  || []).map(String));
+    bannedWallets       = new Set((data.banned_wallets|| []).map(w => w.toLowerCase()));
+  } catch(e) {
+    hiddenMemories      = new Set();
+    permRemovedMemories = new Set();
+    bannedWallets       = new Set();
+  }
 }
 
 window.addEventListener('load', () => {
@@ -1426,32 +1530,90 @@ function updateNavWallet() {
 function shortAddr(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : ''; }
 
 // ── ADMIN / MODERATION ──
-async function ovAdminToggle(memoryId, btn) {
+// ── 3-LEVEL ADMIN MODERATION ──
+function ovAdminBtnHtml(memoryId, isHidden, isPerm) {
+  const menuId = `ov-admin-menu-${memoryId}`;
+  const restoreItem = isHidden
+    ? `<button class="admin-mod-item restore" onclick="ovAdminAct('restore',${memoryId})">✅ Restore (Unhide)</button>`
+    : '';
+  const hideItem = !isHidden
+    ? `<button class="admin-mod-item" onclick="ovAdminAct('hide',${memoryId})">🚫 Temp Hide</button>`
+    : '';
+  const permItem = !isPerm
+    ? `<button class="admin-mod-item" onclick="ovAdminAct('perm',${memoryId})">❌ Perm Remove</button>`
+    : '';
+  const banItem = `<button class="admin-mod-item" onclick="ovAdminAct('ban',${memoryId})">🔨 Ban + Remove</button>`;
+  return `<div class="admin-mod-wrap">
+    <button class="chain-link-btn" style="background:rgba(232,82,82,0.15);border:1px solid #e85252;color:#e85252" onclick="event.stopPropagation();ovAdminMenu('${menuId}')">🛡️ Mod ▾</button>
+    <div class="admin-mod-menu hidden" id="${menuId}">
+      ${restoreItem}${hideItem}${permItem}${banItem}
+    </div>
+  </div>`;
+}
+
+function ovAdminMenu(menuId) {
+  // Close all other open menus first
+  document.querySelectorAll('.admin-mod-menu:not(.hidden)').forEach(m => { if (m.id !== menuId) m.classList.add('hidden'); });
+  const menu = document.getElementById(menuId);
+  if (menu) menu.classList.toggle('hidden');
+  // Close on outside click
+  setTimeout(() => {
+    function outsideClose(e) {
+      if (!e.target.closest('.admin-mod-wrap')) {
+        document.querySelectorAll('.admin-mod-menu').forEach(m => m.classList.add('hidden'));
+        document.removeEventListener('click', outsideClose);
+      }
+    }
+    document.addEventListener('click', outsideClose);
+  }, 10);
+}
+
+async function ovAdminAct(action, memoryId) {
   if (!isAdmin) return;
-  const isHidden = hiddenMemories.has(String(memoryId));
-  if (!isHidden && !_ovAdminKey) {
+  // Close any open menus
+  document.querySelectorAll('.admin-mod-menu').forEach(m => m.classList.add('hidden'));
+  if (!_ovAdminKey) {
     _ovAdminKey = prompt('Admin key:');
     if (!_ovAdminKey) return;
   }
   try {
-    const endpoint = isHidden ? '/api/orcavault/unhide' : '/api/orcavault/hide';
+    let endpoint, body, successMsg;
+    if (action === 'hide') {
+      endpoint = '/api/orcavault/hide';
+      body = { memoryId: String(memoryId), adminKey: _ovAdminKey };
+      successMsg = 'Memory hidden from public view';
+    } else if (action === 'restore') {
+      endpoint = '/api/orcavault/unhide';
+      body = { memoryId: String(memoryId), adminKey: _ovAdminKey };
+      successMsg = 'Memory restored';
+    } else if (action === 'perm') {
+      if (!confirm('Permanently remove memory ' + memoryId + '? This writes to GitHub and cannot be undone easily.')) return;
+      endpoint = '/api/orcavault/perm-remove';
+      body = { memoryId: String(memoryId), adminKey: _ovAdminKey };
+      successMsg = 'Memory permanently removed';
+    } else if (action === 'ban') {
+      if (!confirm('Ban the uploader of memory ' + memoryId + ' and remove all their content? This writes to GitHub.')) return;
+      endpoint = '/api/orcavault/ban-wallet';
+      body = { memoryId: String(memoryId), adminKey: _ovAdminKey };
+      successMsg = 'Wallet banned and content removed';
+    } else return;
+
     const res = await fetch(`${RELAY_URL}${endpoint}`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ memoryId: String(memoryId), adminKey: _ovAdminKey }),
+      body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 401) { _ovAdminKey = null; }
       showToast(data.error || 'Failed', true); return;
     }
-    if (isHidden) {
-      hiddenMemories.delete(String(memoryId));
-      showToast('Memory restored');
-    } else {
-      hiddenMemories.add(String(memoryId));
-      showToast('Memory hidden from public view');
-    }
+    // Update local state
+    if (action === 'hide')    hiddenMemories.add(String(memoryId));
+    if (action === 'restore') hiddenMemories.delete(String(memoryId));
+    if (action === 'perm')  { permRemovedMemories.add(String(memoryId)); hiddenMemories.add(String(memoryId)); }
+    if (action === 'ban' && data.wallet)  { bannedWallets.add(data.wallet.toLowerCase()); }
+    showToast(successMsg);
     renderMemoriesGrid();
   } catch(e) { showToast('Error: ' + e.message, true); }
 }
@@ -1807,10 +1969,12 @@ function renderMemoriesGrid() {
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
     let cardThumb = thumbHtml;
     if (m._isChunked) {
-      if (chunkCache.has(m._memoryId)) {
-        const cd = chunkCache.get(m._memoryId);
-        if (m.memType === 'photo' && cd && cd.startsWith('data:image')) {
-          cardThumb = `<img class="memory-thumb" src="${cd}" alt="${escHtml(m.title)}" loading="lazy">`;
+      const isV3Card = m._source === 'v3relay' || m._contract === 'v3';
+      const cardKey  = (isV3Card ? 'v3-' : 'v2-') + m._memoryId;
+      if (chunkCache.has(cardKey)) {
+        const cd = chunkCache.get(cardKey);
+        if (m.memType === 'photo' && cd && (cd.startsWith('data:image') || cd.startsWith('http'))) {
+          cardThumb = `<img class="memory-thumb" src="${escHtml(cd)}" alt="${escHtml(m.title)}" loading="lazy">`;
         } else {
           cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
         }
@@ -1819,10 +1983,10 @@ function renderMemoriesGrid() {
       }
     }
     const shareUrl = `${location.origin}${location.pathname}?vault=${currentVaultId}&item=${m.idx}`;
-    const adminBtn = isAdmin
-      ? `<button class="chain-link-btn" style="background:rgba(232,82,82,0.15);border:1px solid #e85252;color:#e85252" onclick="event.stopPropagation();ovAdminToggle(${m.idx},this)">${isHidden ? '✅ Unhide' : '🗑️ Remove'}</button>`
-      : '';
-    const hiddenBadge = isAdmin && isHidden ? `<span class="chunked-badge" style="background:rgba(232,82,82,0.12);border-color:rgba(232,82,82,0.4);color:#e85252">🚫 Hidden</span>` : '';
+    const isPerm   = permRemovedMemories.has(String(m.idx));
+    const isBanned = m.addedBy && bannedWallets.has(m.addedBy.toLowerCase());
+    const adminBtn = isAdmin ? ovAdminBtnHtml(m.idx, isHidden, isPerm) : '';
+    const hiddenBadge = isAdmin && isHidden ? `<span class="chunked-badge" style="background:rgba(232,82,82,0.12);border-color:rgba(232,82,82,0.4);color:#e85252">🚫 Hidden</span>` : (isAdmin && isPerm ? `<span class="chunked-badge" style="background:rgba(232,82,82,0.2);border-color:#e85252;color:#e85252">❌ Perm Removed</span>` : '');
     const chainRow = `<div class="chain-link-row">
       <button class="chain-link-btn" onclick="event.stopPropagation();copyMemoryLink('${shareUrl}',this)" style="background:rgba(232,184,75,0.15);border-color:var(--gold);color:var(--gold);font-weight:700">📤 Share</button>
       ${m.txHash ? `<a class="chain-link-btn" href="${LIGHTSCAN_TX}${m.txHash}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔗 Chain</a>` : ''}
@@ -1853,6 +2017,26 @@ function viewMemory(idx) {
   vmVaultId  = currentVaultId;
   vmItemIdx  = idx;
   loadAndShowMemory(currentVaultId, idx);
+}
+
+async function waitForOvRelayStream(statusUrl, totalChunks, onProgress) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  for (let attempt = 0; attempt < 7200; attempt++) {
+    const res  = await fetch(statusUrl);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 500) {
+      throw new Error(data.error || `Stream status failed (${res.status})`);
+    }
+    if (data.status === 'error') {
+      throw new Error(data.error || 'Relay could not build stream');
+    }
+    const total    = data.total || totalChunks;
+    const progress = data.progress || 0;
+    if (onProgress) onProgress(progress, total);
+    if (data.status === 'ready') return data;
+    await sleep(3000);
+  }
+  throw new Error('Stream preparation timed out — try again in a few minutes');
 }
 
 async function loadAndShowMemory(vaultId, idx) {
@@ -1893,23 +2077,30 @@ async function loadAndShowMemory(vaultId, idx) {
       }
     }
 
-    // Chunked reassembly — V2 or V3
+    // Chunked playback — relay HTTP Range stream (no in-browser assembly)
     if (mem._isChunked) {
-      const isV3      = mem._source === 'v3relay' || mem._contract === 'v3';
-      const cacheKey  = (isV3 ? 'v3-' : 'v2-') + mem._memoryId;
-      const readCtr   = isV3 ? readContractV3 : readContractV2;
-      if (!readCtr) {
-        showToast('Contract not available for reassembly', true);
-      } else if (chunkCache.has(cacheKey)) {
+      const isV3     = mem._source === 'v3relay' || mem._contract === 'v3';
+      const ver      = isV3 ? 'v3' : 'v2';
+      const cacheKey = ver + '-' + mem._memoryId;
+      const streamUrl  = `${RELAY_URL}/api/media/stream/orcavault/${ver}/${mem._memoryId}`;
+      const statusUrl  = `${streamUrl}/status`;
+      if (chunkCache.has(cacheKey)) {
         mem = { ...mem, dataURI: chunkCache.get(cacheKey) };
       } else {
-        showLoading('Reassembling memory…', `Fetching ${mem._totalChunks} chunks from Lightchain — this may take a moment`);
-        const chunkFilter = readCtr.filters.ChunkStored(mem._memoryId);
-        const chunkEvents = await readCtr.queryFilter(chunkFilter, 0, 'latest');
-        chunkEvents.sort((a, b) => Number(a.args[1]) - Number(b.args[1]));
-        const assembled = chunkEvents.map(e => e.args[3]).join('');
-        chunkCache.set(cacheKey, assembled);
-        mem = { ...mem, dataURI: assembled };
+        showLoading('Preparing memory stream…', `Relay assembling ${mem._totalChunks} chunks — large files may take a while`);
+        await waitForOvRelayStream(statusUrl, mem._totalChunks, (progress, total) => {
+          showLoading('Preparing memory stream…', `${progress.toLocaleString()} / ${total.toLocaleString()} chunks on relay`);
+        });
+        if (mem.memType === 'text') {
+          const textRes = await fetch(streamUrl);
+          if (!textRes.ok) throw new Error('Could not load text memory from relay');
+          const text = await textRes.text();
+          chunkCache.set(cacheKey, text);
+          mem = { ...mem, dataURI: text };
+        } else {
+          chunkCache.set(cacheKey, streamUrl);
+          mem = { ...mem, dataURI: streamUrl };
+        }
       }
     }
 
@@ -2285,6 +2476,12 @@ async function storeMemory() {
     dataURI = pendingFileDataURI;
   }
 
+  // Show upload warning on first upload (every session)
+  if (!uploadWarningAccepted) {
+    showUploadWarningModal(() => storeMemory());
+    return;
+  }
+
   // Show terms on first upload
   if (!termsAccepted) {
     showTermsModal(() => storeMemory());
@@ -2486,6 +2683,7 @@ async function doRelayUpload() {
     dataURI = pendingFileDataURI;
   }
 
+  if (!uploadWarningAccepted) { showUploadWarningModal(() => doRelayUpload()); return; }
   if (!termsAccepted) { showTermsModal(() => doRelayUpload()); return; }
 
   const rawCaption = (document.getElementById('mem-caption')?.value || '').trim();
@@ -2578,8 +2776,8 @@ function resetAddMemoryForm() {
   document.getElementById('file-preview').style.display = 'none';
   document.getElementById('size-warning').style.display = 'none';
   pendingFileDataURI = null;
-  // Reset visibility to public
-  setVisibility('public');
+  // Reset visibility to private (default — safest choice)
+  setVisibility('private');
 }
 
 // ════════════════════════════════════════════════════════
@@ -2856,7 +3054,7 @@ function copyMemoryLink(url, btn) {
 //  👁️ VISIBILITY (PUBLIC / PRIVATE)
 // ════════════════════════════════════════════════════════
 const PRIV_PREFIX = '||priv||';
-let currentVisibility = 'public'; // 'public' | 'private'
+let currentVisibility = 'private'; // 'public' | 'private'
 
 function setVisibility(v) {
   currentVisibility = v;
@@ -2887,6 +3085,9 @@ function parseCaption(raw) {
 }
 
 function isMemoryVisibleToViewer(mem) {
+  // Perm-removed and banned-wallet memories are never shown to anyone
+  if (permRemovedMemories.has(String(mem.idx))) return false;
+  if (mem.addedBy && bannedWallets.has(mem.addedBy.toLowerCase())) return false;
   // Always visible to the vault owner (connected wallet)
   if (wallet && currentVaultData && wallet.toLowerCase() === currentVaultData.owner.toLowerCase()) return true;
   // Visible if not private
@@ -3089,6 +3290,165 @@ async function creatorDeleteMemory() {
     showToast('Error: ' + e.message, true);
     const btn = document.querySelector('.creator-delete-btn');
     if (btn) { btn.disabled = false; btn.textContent = '🗑️ Delete My Memory'; }
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  🌐 PUBLIC BROWSE
+// ════════════════════════════════════════════════════════
+let _browseAllMemories = null; // cached
+let _browseCat = 'all';
+
+async function showBrowseScreen() {
+  showScreen('browse');
+  if (_browseAllMemories === null) {
+    await loadPublicBrowse();
+  } else {
+    renderBrowseGrid(_browseCat);
+  }
+}
+
+function selectBrowseCat(cat, btn) {
+  _browseCat = cat;
+  document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderBrowseGrid(cat);
+}
+
+async function loadPublicBrowse() {
+  const loadEl    = document.getElementById('browse-loading');
+  const contentEl = document.getElementById('browse-content');
+  if (loadEl) { loadEl.style.display = 'block'; loadEl.textContent = '⏳ Loading public memories from the blockchain…'; }
+  if (contentEl) contentEl.style.display = 'none';
+
+  try {
+    // Ensure moderation lists are loaded
+    await loadOVHidden();
+
+    // Query both V1 and V2 MemoryAdded events
+    const allMems = [];
+    const rp = readProvider || new ethers.JsonRpcProvider(RPC_URL);
+
+    // V1
+    try {
+      const c1 = new ethers.Contract(CONTRACT_ADDRESS, ABI, rp);
+      const evs1 = await c1.queryFilter(c1.filters.MemoryAdded(), 0, 'latest');
+      evs1.forEach(ev => {
+        const [vaultId, itemIndex, addedBy, memType, title, caption, date, dataURI] = ev.args;
+        allMems.push({
+          vaultId:  Number(vaultId),
+          idx:      Number(itemIndex),
+          addedBy,
+          memType,
+          title,
+          caption,
+          date,
+          dataURI,
+          txHash:   ev.transactionHash,
+          contract: 'v1'
+        });
+      });
+    } catch(e) { console.warn('V1 browse error:', e); }
+
+    // V2 — skip chunk entries (idx >= 200000)
+    if (readContractV2) {
+      try {
+        const evs2 = await readContractV2.queryFilter(readContractV2.filters.MemoryAdded(), 0, 'latest');
+        evs2.forEach(ev => {
+          const [vaultId, itemIndex, addedBy, memType, title, caption, date, dataURI] = ev.args;
+          const idx = Number(itemIndex);
+          if (idx >= 200000) return; // skip chunk entries
+          allMems.push({ vaultId: Number(vaultId), idx, addedBy, memType, title, caption, date, dataURI, txHash: ev.transactionHash, contract: 'v2' });
+        });
+      } catch(e) { console.warn('V2 browse error:', e); }
+    }
+
+    // Parse privacy + filter
+    const publicMems = allMems.filter(m => {
+      const parsed = parseCaption(m.caption);
+      if (parsed.isPrivate) return false;
+      if (permRemovedMemories.has(String(m.idx))) return false;
+      if (hiddenMemories.has(String(m.idx))) return false;
+      if (m.addedBy && bannedWallets.has(m.addedBy.toLowerCase())) return false;
+      return true;
+    });
+
+    // Strip priv prefix from captions
+    publicMems.forEach(m => { m.caption = parseCaption(m.caption).caption; });
+
+    _browseAllMemories = publicMems;
+    if (loadEl) loadEl.style.display = 'none';
+    if (contentEl) contentEl.style.display = 'block';
+    renderBrowseGrid(_browseCat);
+  } catch(e) {
+    if (loadEl) { loadEl.textContent = '⚠️ Could not load — ' + (e.message || e); }
+    console.error('Browse error:', e);
+  }
+}
+
+function renderBrowseGrid(cat) {
+  const contentEl = document.getElementById('browse-content');
+  if (!contentEl || !_browseAllMemories) return;
+  const filtered = cat === 'all' ? _browseAllMemories : _browseAllMemories.filter(m => m.memType === cat);
+  if (filtered.length === 0) {
+    contentEl.innerHTML = `<div class="browse-empty">No public ${cat === 'all' ? '' : cat + ' '}memories found yet.<br><span style="font-size:18px">Be the first to share one! 🐬</span></div>`;
+    return;
+  }
+  const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄'};
+  let html = '<div class="memory-grid">';
+  filtered.forEach(m => {
+    const icon = typeIcons[m.memType] || '📎';
+    let thumbHtml = (m.memType === 'photo' && m.dataURI && m.dataURI.startsWith('data:image'))
+      ? `<img class="memory-thumb" src="${escHtml(m.dataURI)}" alt="${escHtml(m.title)}" loading="lazy">`
+      : `<div class="memory-thumb-placeholder">${icon}</div>`;
+    const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
+    const shareUrl = `${BASE_URL}?vault=${m.vaultId}&item=${m.idx}`;
+    html += `<div class="memory-card" onclick="window.location.href='${escHtml(shareUrl)}'">
+      ${thumbHtml}
+      <div class="memory-card-body">
+        <div class="memory-type-badge">${icon} ${capitalize(m.memType)}</div>
+        <div class="memory-card-title">${escHtml(m.title)}</div>
+        ${dateStr ? `<div class="memory-card-date">${dateStr}</div>` : ''}
+        <div style="font-size:14px;color:var(--muted);margin-top:4px">Archive #${m.vaultId}</div>
+      </div>
+      <div class="chain-link-row">
+        <button class="chain-link-btn" onclick="event.stopPropagation();navigator.clipboard.writeText('${escHtml(shareUrl)}').then(()=>showToast('Link copied!'))" style="background:rgba(232,184,75,0.15);border-color:var(--gold);color:var(--gold);font-weight:700">📤 Share</button>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  contentEl.innerHTML = html;
+}
+
+// ════════════════════════════════════════════════════════
+//  ⚠️ UPLOAD WARNING MODAL
+// ════════════════════════════════════════════════════════
+function showUploadWarningModal(callback) {
+  _uploadWarnCallback = callback;
+  // Reset checkboxes
+  ['uwarn-check1','uwarn-check2','uwarn-check3','uwarn-check4'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.checked = false;
+  });
+  const confirmBtn = document.getElementById('uwarn-confirm-btn');
+  if (confirmBtn) confirmBtn.disabled = true;
+  document.getElementById('modal-upload-warning').classList.remove('hidden');
+}
+
+function onUploadWarnChange() {
+  const allChecked = ['uwarn-check1','uwarn-check2','uwarn-check3','uwarn-check4']
+    .every(id => { const el = document.getElementById(id); return el && el.checked; });
+  const confirmBtn = document.getElementById('uwarn-confirm-btn');
+  if (confirmBtn) confirmBtn.disabled = !allChecked;
+}
+
+function confirmUploadWarning() {
+  document.getElementById('modal-upload-warning').classList.add('hidden');
+  uploadWarningAccepted = true;
+  if (_uploadWarnCallback) {
+    const cb = _uploadWarnCallback;
+    _uploadWarnCallback = null;
+    cb();
   }
 }
 </script>

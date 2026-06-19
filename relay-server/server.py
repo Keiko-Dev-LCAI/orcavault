@@ -49,6 +49,7 @@ CORS(app)
 RPC_URL                  = "https://rpc.mainnet.lightchain.ai"
 RELAY_PRIVATE_KEY        = os.environ.get("RELAY_PRIVATE_KEY", "")
 V3_CONTRACT_ADDRESS      = os.environ.get("V3_CONTRACT_ADDRESS", "")
+ORCAVAULT_V2_ADDRESS     = os.environ.get("ORCAVAULT_V2_ADDRESS", "0xc871C3eA5A9a6ca65A61D0415360c1F54FD4c499")
 OWNER_WALLETS            = {w.strip().lower() for w in os.environ.get("OWNER_WALLET", "").split(",") if w.strip()}
 BASE_FEE_LCAI            = float(os.environ.get("RELAY_FEE_LCAI", "2.0"))
 LOW_BALANCE_THRESHOLD    = float(os.environ.get("LOW_BALANCE_THRESHOLD", "10.0"))
@@ -69,6 +70,7 @@ LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
 LIGHTTUBE_REPAIR_CACHE_DIR = os.environ.get("LIGHTTUBE_REPAIR_CACHE_DIR", "/data/lt_repair_cache")
 LT_STREAM_CACHE_DIR      = os.environ.get("LT_STREAM_CACHE_DIR", "/data/lt_stream_cache")
+OV_STREAM_CACHE_DIR      = os.environ.get("OV_STREAM_CACHE_DIR", "/data/ov_stream_cache")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
 # ── AIVM (Lightchain decentralized inference) ────────────────────────────────
 _AIVM_GATEWAY  = "https://chat-api.mainnet.lightchain.ai"
@@ -789,6 +791,180 @@ def _ensure_stream_build_started(version, video_id):
             return state
         _stream_builds[key] = {'status': 'starting', 'progress': 0, 'total': 0, 'error': None}
         t = threading.Thread(target=_assemble_lighttube_stream, args=(version, video_id), daemon=True)
+        t.start()
+    return _stream_get_build(key)
+
+
+def _orcavault_contract_for_version(version):
+    if version == 'v3':
+        return V3_CONTRACT_ADDRESS or None
+    if version == 'v2':
+        return ORCAVAULT_V2_ADDRESS or None
+    return None
+
+
+def _ov_stream_cache_key(version, memory_id):
+    return f"orcavault-{version}-{memory_id}"
+
+
+def _ov_stream_paths(version, memory_id):
+    key  = _ov_stream_cache_key(version, memory_id)
+    os.makedirs(OV_STREAM_CACHE_DIR, exist_ok=True)
+    base = os.path.join(OV_STREAM_CACHE_DIR, key)
+    return base + '.bin', base + '.meta.json'
+
+
+def _ov_stream_save_meta(meta_path, total_chunks, nbytes, mime, mem_type=''):
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            'totalChunks': total_chunks,
+            'bytes':       nbytes,
+            'mime':        mime,
+            'memType':     mem_type,
+            'built_at':    int(time.time()),
+        }, f)
+
+
+def _get_ov_memory_created(w3_conn, contract_address, memory_id):
+    """Read MemoryCreated for totalChunks + mediaType."""
+    from eth_abi import decode as abi_decode
+    addr        = Web3.to_checksum_address(contract_address)
+    event_topic = '0x' + w3_conn.keccak(
+        text='MemoryCreated(uint256,address,string,string,string,uint256,string,uint256)'
+    ).hex()
+    memory_topic = '0x' + hex(memory_id)[2:].zfill(64)
+    logs = w3_conn.eth.get_logs({
+        'fromBlock': 0,
+        'toBlock':   'latest',
+        'address':   addr,
+        'topics':    [event_topic, memory_topic],
+    })
+    if not logs:
+        raise Exception(f'OrcaVault memory {memory_id} not found on-chain')
+    data = logs[0]['data']
+    if isinstance(data, str):
+        data = bytes.fromhex(data[2:])
+    _title, _desc, media_type, total_chunks, _template, _ts = abi_decode(
+        ['string', 'string', 'string', 'uint256', 'string', 'uint256'], data
+    )
+    return int(total_chunks), str(media_type)
+
+
+def _fetch_ov_chunk_string(w3_conn, contract_address, memory_id, chunk_index, from_block=0):
+    """Fetch one ChunkStored payload for a memory chunk index (latest event wins)."""
+    from eth_abi import decode as abi_decode
+    addr         = Web3.to_checksum_address(contract_address)
+    event_topic  = '0x' + w3_conn.keccak(text='ChunkStored(uint256,uint256,uint256,string)').hex()
+    memory_topic = '0x' + hex(memory_id)[2:].zfill(64)
+    chunk_topic  = '0x' + hex(chunk_index)[2:].zfill(64)
+    logs = []
+    try:
+        logs = w3_conn.eth.get_logs({
+            'fromBlock': from_block,
+            'toBlock':   'latest',
+            'address':   addr,
+            'topics':    [event_topic, memory_topic, chunk_topic],
+        })
+    except Exception:
+        logs = []
+    if not logs:
+        try:
+            latest = w3_conn.eth.block_number
+            recent_from = max(from_block, latest - 500_000)
+            if recent_from > from_block:
+                logs = w3_conn.eth.get_logs({
+                    'fromBlock': recent_from,
+                    'toBlock':   'latest',
+                    'address':   addr,
+                    'topics':    [event_topic, memory_topic, chunk_topic],
+                })
+        except Exception:
+            logs = []
+    if not logs:
+        return None
+    log  = logs[-1]
+    data = log['data']
+    if isinstance(data, str):
+        data = bytes.fromhex(data[2:])
+    _total, chunk_data = abi_decode(['uint256', 'string'], data)
+    return chunk_data
+
+
+def _assemble_orcavault_stream(version, memory_id):
+    """Build cached media file from on-chain OrcaVault chunks — low RAM, batched RPC."""
+    key = _ov_stream_cache_key(version, memory_id)
+    out_path, meta_path = _ov_stream_paths(version, memory_id)
+    tmp_path = out_path + '.building'
+    try:
+        contract_address = _orcavault_contract_for_version(version)
+        if not contract_address:
+            raise Exception(f'OrcaVault {version} contract not configured on relay')
+        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+        total_chunks, mem_type = _get_ov_memory_created(w3_local, contract_address, memory_id)
+        _stream_set_build(key, status='building', progress=0, total=total_chunks, error=None)
+
+        mime_type = 'application/octet-stream'
+        carry     = ['']
+        fetched   = 0
+        with open(tmp_path, 'wb') as outf:
+            for start in range(0, total_chunks, _STREAM_FETCH_BATCH):
+                end = min(start + _STREAM_FETCH_BATCH, total_chunks)
+                batch_indices = list(range(start, end))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=_STREAM_FETCH_BATCH) as pool:
+                    futures = {
+                        ci: pool.submit(_fetch_ov_chunk_string, w3_local, contract_address, memory_id, ci)
+                        for ci in batch_indices
+                    }
+                    for ci in batch_indices:
+                        chunk_str = futures[ci].result()
+                        if not chunk_str:
+                            raise Exception(f'Chunk {ci} missing on-chain for memory {memory_id}')
+                        if ci == 0 and chunk_str.startswith('data:'):
+                            m = chunk_str.split(';', 1)[0]
+                            if m.startswith('data:'):
+                                mime_type = m[5:] or mime_type
+                        _append_chunk_string_to_file(outf, chunk_str, carry)
+                        fetched += 1
+                _stream_set_build(key, progress=fetched, total=total_chunks)
+                if fetched % 500 == 0 or fetched == total_chunks:
+                    print(f"[ov-stream] {key}: assembled {fetched}/{total_chunks} chunks")
+            if carry[0]:
+                padded = carry[0] + '=' * ((4 - len(carry[0]) % 4) % 4)
+                outf.write(base64.b64decode(padded))
+
+        nbytes = os.path.getsize(tmp_path)
+        os.replace(tmp_path, out_path)
+        _ov_stream_save_meta(meta_path, total_chunks, nbytes, mime_type, mem_type)
+        _stream_set_build(key, status='ready', progress=total_chunks, total=total_chunks,
+                          mime=mime_type, bytes=nbytes, memType=mem_type)
+        print(f"[ov-stream] {key}: ready ({nbytes:,} bytes, {mime_type})")
+    except Exception as e:
+        try:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        _stream_set_build(key, status='error', error=str(e))
+        print(f"[ov-stream] {key}: build failed — {e}")
+
+
+def _ensure_ov_stream_build_started(version, memory_id):
+    key = _ov_stream_cache_key(version, memory_id)
+    out_path, meta_path = _ov_stream_paths(version, memory_id)
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        meta = _stream_load_meta(meta_path) or {}
+        _stream_set_build(key, status='ready', progress=meta.get('totalChunks', 0),
+                          total=meta.get('totalChunks', 0), mime=meta.get('mime', 'application/octet-stream'),
+                          bytes=meta.get('bytes', os.path.getsize(out_path)),
+                          memType=meta.get('memType', ''))
+        return _stream_get_build(key)
+
+    with _stream_builds_lock:
+        state = _stream_builds.get(key)
+        if state and state.get('status') in ('building', 'ready'):
+            return state
+        _stream_builds[key] = {'status': 'starting', 'progress': 0, 'total': 0, 'error': None}
+        t = threading.Thread(target=_assemble_orcavault_stream, args=(version, memory_id), daemon=True)
         t.start()
     return _stream_get_build(key)
 
@@ -1602,6 +1778,91 @@ def lighttube_stream_media(version, video_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/media/stream/orcavault/<version>/<int:memory_id>/status', methods=['GET'])
+def orcavault_stream_status(version, memory_id):
+    """Poll relay-side assembly of an OrcaVault chunked memory for HTTP Range streaming."""
+    if version not in ('v2', 'v3'):
+        return jsonify({'error': 'version must be v2 or v3'}), 400
+    try:
+        contract_address = _orcavault_contract_for_version(version)
+        if not contract_address:
+            return jsonify({'error': f'OrcaVault {version} not configured'}), 400
+
+        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+        total, mem_type = _get_ov_memory_created(w3_local, contract_address, memory_id)
+        if total <= 0:
+            return jsonify({'error': 'Memory has no chunks'}), 404
+
+        out_path, meta_path = _ov_stream_paths(version, memory_id)
+        if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+            meta = _stream_load_meta(meta_path) or {}
+            return jsonify({
+                'status':   'ready',
+                'progress': total,
+                'total':    total,
+                'mime':     meta.get('mime', 'application/octet-stream'),
+                'memType':  meta.get('memType', mem_type),
+            })
+
+        key   = _ov_stream_cache_key(version, memory_id)
+        build = _stream_get_build(key)
+        if not build or build.get('status') not in ('building', 'ready', 'starting'):
+            _ensure_ov_stream_build_started(version, memory_id)
+            build = _stream_get_build(key) or {}
+
+        if build.get('status') == 'error':
+            return jsonify({
+                'status':   'error',
+                'progress': build.get('progress', 0),
+                'total':    total,
+                'error':    build.get('error', 'Build failed'),
+            }), 500
+
+        return jsonify({
+            'status':   build.get('status', 'building'),
+            'progress': build.get('progress', 0),
+            'total':    total,
+            'mime':     build.get('mime', 'application/octet-stream'),
+            'memType':  build.get('memType', mem_type),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/media/stream/orcavault/<version>/<int:memory_id>', methods=['GET', 'HEAD'])
+def orcavault_stream_media(version, memory_id):
+    """Stream assembled OrcaVault memory with HTTP Range support (plain media src)."""
+    if version not in ('v2', 'v3'):
+        return jsonify({'error': 'version must be v2 or v3'}), 400
+    try:
+        out_path, meta_path = _ov_stream_paths(version, memory_id)
+        if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 0):
+            contract_address = _orcavault_contract_for_version(version)
+            if not contract_address:
+                return jsonify({'error': f'OrcaVault {version} not configured'}), 400
+            w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+            total, _mem_type = _get_ov_memory_created(w3_local, contract_address, memory_id)
+            _ensure_ov_stream_build_started(version, memory_id)
+            build = _stream_get_build(_ov_stream_cache_key(version, memory_id)) or {}
+            return jsonify({
+                'error':    'Stream not ready',
+                'status':   build.get('status', 'building'),
+                'progress': build.get('progress', 0),
+                'total':    total,
+            }), 503
+
+        meta = _stream_load_meta(meta_path) or {}
+        mime = meta.get('mime', 'application/octet-stream')
+        return send_file(
+            out_path,
+            mimetype=mime,
+            conditional=True,
+            download_name=f'orcavault-{version}-{memory_id}.bin',
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ─── LightTube thumbnail endpoints ───────────────────────────────────────────
 
 @app.route('/api/lighttube/thumb/<version>/<video_id>', methods=['GET'])
@@ -1766,6 +2027,9 @@ def health():
         'lighttube_repair_fix': 'lcai-penny-gas',
         'lighttube_stream':    'range-cache-v1',
         'lighttube_stream_cache_dir': LT_STREAM_CACHE_DIR,
+        'orcavault_stream':    'range-cache-v1',
+        'orcavault_stream_cache_dir': OV_STREAM_CACHE_DIR,
+        'orcavault_v2':        ORCAVAULT_V2_ADDRESS or None,
         'lighttube_gas_price_wei': LT_CHUNK_GAS_PRICE_WEI,
         'chain_id':            CHAIN_ID,
     })
