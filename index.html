@@ -540,7 +540,7 @@ footer a{color:var(--gold);text-decoration:none}
   </div>
 
   <div style="text-align:center;padding:16px 56px 8px;font-size:18px;color:var(--muted)">
-    Gas costs ~$0.000015 per photo · No monthly fees ever ·
+    Upload costs ~$0.000015 in gas · No monthly fees ever ·
     <button class="btn btn-outline" style="padding:8px 18px;font-size:17px;min-height:auto;margin-left:8px" onclick="showScreen('recovery')">🔐 Recovery Info</button>
   </div>
 
@@ -1921,6 +1921,8 @@ function renderMemoriesGrid() {
     let thumbHtml = '';
     if (m.memType === 'photo' && m.dataURI && m.dataURI.startsWith('data:image')) {
       thumbHtml = `<img class="memory-thumb" src="${escHtml(m.dataURI)}" alt="${escHtml(m.title)}" loading="lazy">`;
+    } else if (m.memType === 'video' && m.dataURI && m.dataURI.startsWith('data:video')) {
+      thumbHtml = `<div class="memory-thumb-placeholder video-thumb-gen" data-video-idx="${m.idx}">${icon}</div>`;
     } else {
       thumbHtml = `<div class="memory-thumb-placeholder">${icon}</div>`;
     }
@@ -1968,6 +1970,39 @@ function renderMemoriesGrid() {
     html = `<div style="text-align:right;margin-bottom:20px"><button class="btn btn-gold" onclick="goAddMemory()">+ Add Memory</button></div>` + html;
   }
   el.innerHTML = html;
+  generateVideoThumbnails();
+}
+
+function generateVideoThumbnails() {
+  document.querySelectorAll('.video-thumb-gen').forEach(function(el) {
+    var idx = Number(el.dataset.videoIdx);
+    var m = currentMemories.find(function(x) { return x.idx === idx; });
+    if (!m || !m.dataURI) return;
+    var video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.src = m.dataURI;
+    video.addEventListener('loadedmetadata', function() {
+      video.currentTime = Math.min(1, video.duration / 4);
+    });
+    video.addEventListener('seeked', function onSeeked() {
+      video.removeEventListener('seeked', onSeeked);
+      try {
+        var canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = 180;
+        canvas.getContext('2d').drawImage(video, 0, 0, 320, 180);
+        var img = document.createElement('img');
+        img.className = 'memory-thumb';
+        img.alt = m.title || 'Video';
+        img.src = canvas.toDataURL('image/jpeg', 0.8);
+        el.replaceWith(img);
+      } catch(e) {}
+      video.src = '';
+    });
+    video.addEventListener('error', function() {});
+    video.load();
+  });
 }
 
 function viewMemory(idx) {
