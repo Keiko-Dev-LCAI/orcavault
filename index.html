@@ -440,12 +440,13 @@ footer a{color:var(--gold);text-decoration:none}
 .private-badge{display:inline-flex;align-items:center;gap:6px;font-size:15px;font-weight:700;padding:5px 12px;border-radius:8px;background:rgba(155,127,232,0.15);color:var(--purple);border:1px solid rgba(155,127,232,0.3);margin-bottom:10px}
 
 /* ── PUBLIC BROWSE ── */
-.browse-hero{padding:48px 56px 32px;background:linear-gradient(160deg,#0d1528 0%,#0d0b18 60%,#0d1820 100%)}
-.browse-cats{display:flex;gap:10px;flex-wrap:wrap;padding:0 56px 24px;border-bottom:1px solid var(--border)}
+.browse-hero{padding:18px 56px 12px;background:linear-gradient(160deg,#0d1528 0%,#0d0b18 60%,#0d1820 100%)}
+.browse-cats{display:flex;gap:8px;flex-wrap:wrap;padding:0 56px 10px;border-bottom:1px solid var(--border)}
 .cat-btn{padding:11px 22px;border-radius:30px;border:1.5px solid var(--border);background:transparent;color:var(--muted);font-size:18px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .15s}
 .cat-btn:hover{border-color:var(--gold);color:var(--gold)}
 .cat-btn.active{background:var(--gold);color:#0d0b18;border-color:var(--gold)}
-.browse-grid-wrap{padding:32px 56px 56px}
+.browse-grid-wrap{padding:12px 56px 8px}
+#browse-content .memory-thumb,#browse-content .memory-thumb-placeholder{height:150px}
 .browse-grid-title{font-size:24px;font-weight:800;color:var(--muted);margin-bottom:18px;text-transform:uppercase;letter-spacing:.06em}
 .browse-section{margin-bottom:48px}
 .browse-empty{text-align:center;padding:80px 40px;color:var(--muted);font-size:22px}
@@ -1001,9 +1002,8 @@ footer a{color:var(--gold);text-decoration:none}
 ══════════════════════════════════════════════ -->
 <div id="screen-browse" class="screen">
   <div class="browse-hero">
-    <div style="font-size:36px;margin-bottom:10px">🌐</div>
-    <h1 style="font-size:38px;font-weight:900;margin-bottom:8px">Browse Public Archives</h1>
-    <p style="font-size:20px;color:var(--muted);max-width:700px;margin:0">Public memories shared by the Lightchain community — photos, videos, stories, and more stored permanently on-chain.</p>
+    <h1 style="font-size:30px;font-weight:900;margin-bottom:4px">🌐 Browse Public Archives</h1>
+    <p style="font-size:18px;color:var(--muted);margin:0">Community memories stored permanently on-chain.</p>
   </div>
   <div class="browse-cats" id="browse-cats">
     <button class="cat-btn active" onclick="selectBrowseCat('all',this)">🌐 All</button>
@@ -1017,9 +1017,6 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="browse-grid-wrap">
     <div id="browse-loading" style="text-align:center;padding:60px 20px;font-size:22px;color:var(--muted)">⏳ Loading public memories…</div>
     <div id="browse-content" style="display:none"></div>
-  </div>
-  <div style="text-align:center;padding-bottom:40px">
-    <button class="btn btn-outline" onclick="showScreen('landing')" style="font-size:18px">🏠 Back to Home</button>
   </div>
 </div>
 
@@ -3337,6 +3334,8 @@ async function creatorDeleteMemory() {
 // ════════════════════════════════════════════════════════
 let _browseAllMemories = null; // cached
 let _browseCat = 'all';
+let _browsePage = 0;
+const _browsePageSize = 6;
 
 async function showBrowseScreen() {
   showScreen('browse');
@@ -3349,6 +3348,7 @@ async function showBrowseScreen() {
 
 function selectBrowseCat(cat, btn) {
   _browseCat = cat;
+  _browsePage = 0;
   document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   renderBrowseGrid(cat);
@@ -3475,8 +3475,12 @@ function renderBrowseGrid(cat) {
     return;
   }
   const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄',website:'🔗'};
+  const totalPages = Math.ceil(filtered.length / _browsePageSize);
+  if (_browsePage >= totalPages) _browsePage = 0;
+  const start = _browsePage * _browsePageSize;
+  const pageItems = filtered.slice(start, start + _browsePageSize);
   let html = '<div class="memory-grid">';
-  filtered.forEach(m => {
+  pageItems.forEach(m => {
     const icon = typeIcons[m.memType] || '📎';
     let thumbHtml = (m.memType === 'photo' && m.dataURI && m.dataURI.startsWith('data:image'))
       ? `<img class="memory-thumb" src="${escHtml(m.dataURI)}" alt="${escHtml(m.title)}" loading="lazy">`
@@ -3498,6 +3502,15 @@ function renderBrowseGrid(cat) {
     </div>`;
   });
   html += '</div>';
+  if (totalPages > 1) {
+    const prevDis = _browsePage === 0 ? 'disabled style="opacity:0.4;cursor:not-allowed"' : '';
+    const nextDis = _browsePage >= totalPages - 1 ? 'disabled style="opacity:0.4;cursor:not-allowed"' : '';
+    html += `<div style="display:flex;align-items:center;justify-content:center;gap:20px;padding:12px 0 4px;font-size:18px">
+      <button class="btn btn-outline" ${prevDis} onclick="_browsePage--;renderBrowseGrid(_browseCat)" style="padding:8px 22px;min-height:auto;font-size:18px">← Prev</button>
+      <span style="color:var(--muted)">${_browsePage + 1} / ${totalPages}</span>
+      <button class="btn btn-outline" ${nextDis} onclick="_browsePage++;renderBrowseGrid(_browseCat)" style="padding:8px 22px;min-height:auto;font-size:18px">Next →</button>
+    </div>`;
+  }
   contentEl.innerHTML = html;
 }
 
