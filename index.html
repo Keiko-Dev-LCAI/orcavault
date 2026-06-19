@@ -47,6 +47,12 @@ contract AudioVisualArchives {
 }
 -->
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.umd.min.js"></script>
+<script type="module">
+  try {
+    const { EthereumProvider } = await import('https://esm.sh/@walletconnect/ethereum-provider@2.17.3');
+    window.WCEthereumProvider = EthereumProvider;
+  } catch(e) { console.warn('WalletConnect unavailable:', e); }
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
 :root {
@@ -1321,6 +1327,7 @@ const TEMPLATES = [
 let wallet        = null;
 let provider      = null;
 let signer        = null;
+let _wcProv       = null;
 let contract      = null;
 let readProvider  = null;
 let readContract  = null;
@@ -1458,10 +1465,62 @@ function detectProvider() {
 }
 
 function openWalletPicker() {
-  var encoded = encodeURIComponent(OV_DAPP_URL);
-  document.getElementById('ov-tw-deep-link').href = 'https://link.trustwallet.com/open_url?coin_id=60&url=' + encoded;
-  document.getElementById('ov-mm-deep-link').href = 'https://metamask.app.link/dapp/keiko-dev-lcai.github.io/orcavault/';
+  // If WalletConnect is loaded, skip the static modal and go straight to WC
+  if (window.WCEthereumProvider) {
+    connectViaWalletConnect();
+    return;
+  }
   document.getElementById('no-wallet-modal-ov').style.display = 'flex';
+}
+
+async function connectViaWalletConnect() {
+  document.getElementById('no-wallet-modal-ov').style.display = 'none';
+  if (!window.WCEthereumProvider) { showToast('WalletConnect not loaded yet. Try again.', true); return; }
+  try {
+    _wcProv = await window.WCEthereumProvider.init({
+      projectId: '3c6a0da53258912a28923198ddac3333',
+      chains: [9200],
+      optionalChains: [1],
+      showQrModal: true,
+      metadata: {
+        name: 'Lightchain Archives',
+        description: 'Permanent on-chain file storage on Lightchain',
+        url: 'https://orcavault.win',
+        icons: ['https://orcavault.win/favicon.png']
+      },
+      rpcMap: { 9200: RPC_URL }
+    });
+    await _wcProv.enable();
+    // Re-use existing connectWallet logic with the WC provider
+    showLoading('Connecting wallet…', 'Please approve in your wallet app');
+    provider = new ethers.BrowserProvider(_wcProv);
+    signer   = await provider.getSigner();
+    wallet   = await signer.getAddress();
+    try {
+      await _wcProv.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: CHAIN_ID_HEX }] });
+    } catch(sw) {
+      if (sw.code === 4902) {
+        await _wcProv.request({ method: 'wallet_addEthereumChain', params: [{
+          chainId: CHAIN_ID_HEX, chainName: 'Lightchain AI Mainnet',
+          nativeCurrency: { name: 'LCAI', symbol: 'LCAI', decimals: 18 },
+          rpcUrls: [RPC_URL], blockExplorerUrls: ['https://mainnet.lightscan.app']
+        }]});
+      }
+    }
+    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    if (V2_CONTRACT_ADDRESS) contractV2 = new ethers.Contract(V2_CONTRACT_ADDRESS, V2_ABI, signer);
+    if (V3_CONTRACT_ADDRESS) contractV3 = new ethers.Contract(V3_CONTRACT_ADDRESS, V3_ABI, signer);
+    isAdmin = OV_ADMIN_WALLETS.includes(wallet.toLowerCase());
+    hideLoading();
+    updateNavWallet();
+    updateRecoveryPanels();
+    showToast('Wallet connected! ' + shortAddr(wallet));
+    if (RELAY_URL && V3_CONTRACT_ADDRESS) { checkRelayAccess(wallet); }
+  } catch(e) {
+    hideLoading();
+    if (!e || e.message?.includes('User rejected') || e.message?.includes('rejected') || e.code === 4001) return;
+    showToast('WalletConnect failed. Try a different wallet.', true);
+  }
 }
 
 function copyDappLink() {
@@ -1524,6 +1583,7 @@ async function connectWallet() {
 
 function disconnectWallet() {
   wallet = null; provider = null; signer = null; contract = null; contractV2 = null; contractV3 = null;
+  if (_wcProv) { try { _wcProv.disconnect(); } catch {} _wcProv = null; }
   relayAccess = false; relayTier = 'none'; relayFee = null; relayWalletAddr = '';
   isAdmin = false; _ovAdminKey = null;
   const bc = document.getElementById('btn-connect'); if (bc) bc.style.display = '';
@@ -3732,21 +3792,14 @@ function confirmUploadWarning() {
   <div style="background:var(--card);border:1px solid var(--border);border-radius:20px;width:100%;max-width:400px;padding:32px 28px">
     <div style="font-size:42px;text-align:center;margin-bottom:12px">🔗</div>
     <div style="font-size:26px;font-weight:900;color:var(--text);text-align:center;margin-bottom:8px">Connect Wallet</div>
-    <p style="font-size:18px;color:var(--muted);line-height:1.6;text-align:center;margin-bottom:24px">No wallet detected in this browser. Open Lightchain Archives inside your wallet's built-in browser, or copy the link and paste it there.</p>
-    <a id="ov-tw-deep-link" href="#" target="_blank" style="display:flex;align-items:center;gap:14px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:10px;text-decoration:none;color:var(--text)">
-      <span style="font-size:30px;flex-shrink:0">🛡️</span>
+    <p style="font-size:18px;color:var(--muted);line-height:1.6;text-align:center;margin-bottom:24px">No wallet detected. Use WalletConnect to connect any wallet — shows a QR code on desktop or opens your wallet app on mobile.</p>
+    <button onclick="connectViaWalletConnect()" style="display:flex;align-items:center;gap:14px;background:rgba(100,180,255,0.08);border:1px solid #64b4ff;border-radius:14px;padding:16px 18px;margin-bottom:10px;width:100%;text-align:left;color:var(--text);cursor:pointer;font-family:inherit">
+      <span style="font-size:30px;flex-shrink:0">🔗</span>
       <div>
-        <div style="font-size:18px;font-weight:700">Open in Trust Wallet</div>
-        <div style="font-size:15px;color:var(--muted)">Opens Lightchain Archives in Trust Wallet browser</div>
+        <div style="font-size:18px;font-weight:700">WalletConnect</div>
+        <div style="font-size:15px;color:var(--muted)">Scan QR on desktop · Open wallet app on mobile</div>
       </div>
-    </a>
-    <a id="ov-mm-deep-link" href="#" target="_blank" style="display:flex;align-items:center;gap:14px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:10px;text-decoration:none;color:var(--text)">
-      <span style="font-size:30px;flex-shrink:0">🦊</span>
-      <div>
-        <div style="font-size:18px;font-weight:700">Open in MetaMask</div>
-        <div style="font-size:15px;color:var(--muted)">Opens Lightchain Archives in MetaMask browser</div>
-      </div>
-    </a>
+    </button>
     <button id="ov-copy-link-btn" onclick="copyDappLink()" style="display:flex;align-items:center;gap:14px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:14px;padding:16px 18px;width:100%;text-align:left;color:var(--text);cursor:pointer;margin-bottom:20px;font-family:inherit">
       <span style="font-size:30px;flex-shrink:0">🔗</span>
       <div>
