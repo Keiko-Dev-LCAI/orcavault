@@ -56,7 +56,8 @@ LOW_BALANCE_THRESHOLD    = float(os.environ.get("LOW_BALANCE_THRESHOLD", "10.0")
 PAID_WALLETS_FILE        = os.environ.get("PAID_WALLETS_FILE", "/data/paid_wallets.json")
 LIGHTTUBE_HIDDEN_FILE    = os.environ.get("LIGHTTUBE_HIDDEN_FILE", "/data/lighttube_hidden.json")
 LIGHTTUBE_OVERRIDES_FILE = os.environ.get("LIGHTTUBE_OVERRIDES_FILE", "/data/lighttube_overrides.json")
-ORCAVAULT_HIDDEN_FILE    = os.environ.get("ORCAVAULT_HIDDEN_FILE", "/data/orcavault_hidden.json")
+ORCAVAULT_HIDDEN_FILE      = os.environ.get("ORCAVAULT_HIDDEN_FILE", "/data/orcavault_hidden.json")
+ORCAVAULT_VISIBILITY_FILE  = os.environ.get("ORCAVAULT_VISIBILITY_FILE", "/data/orcavault_visibility.json")
 LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
 # Comma-separated IDs that are ALWAYS hidden (survive redeploys without a volume)
 LIGHTTUBE_HIDDEN_SEED    = {s.strip() for s in os.environ.get("LIGHTTUBE_HIDDEN_IDS", "").split(",") if s.strip()}
@@ -2050,6 +2051,23 @@ def save_orcavault_hidden(hidden):
     except Exception as e:
         print(f"Warning: could not save orcavault_hidden: {e}")
 
+def load_orcavault_visibility():
+    """Returns dict: { memoryIdx_str: { setter: wallet, visibility: 'public'|'private' } }"""
+    try:
+        with open(ORCAVAULT_VISIBILITY_FILE, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_orcavault_visibility(overrides):
+    """Persist OrcaVault visibility overrides to disk."""
+    try:
+        os.makedirs(os.path.dirname(ORCAVAULT_VISIBILITY_FILE), exist_ok=True)
+        with open(ORCAVAULT_VISIBILITY_FILE, 'w') as f:
+            json.dump(overrides, f, indent=2)
+    except Exception as e:
+        print(f"Warning: could not save orcavault_visibility: {e}")
+
 def has_relay_access(wallet_address: str) -> bool:
     """True if wallet is owner (free) or has paid."""
     addr = wallet_address.lower()
@@ -2636,11 +2654,12 @@ def lighttube_set_override():
 
 @app.route('/api/orcavault/hidden', methods=['GET'])
 def orcavault_get_hidden():
-    """Public endpoint — returns hidden IDs, permanently removed IDs, and banned wallets."""
+    """Public endpoint — returns hidden IDs, permanently removed IDs, banned wallets, and visibility overrides."""
     hidden = load_orcavault_hidden()
     perm   = get_ov_permanent_hidden()
     banned = get_ov_banned_wallets()
-    return jsonify({'hidden': list(hidden), 'perm_removed': list(perm), 'banned_wallets': list(banned)})
+    vis    = load_orcavault_visibility()
+    return jsonify({'hidden': list(hidden), 'perm_removed': list(perm), 'banned_wallets': list(banned), 'visibility_overrides': vis})
 
 @app.route('/api/orcavault/hide', methods=['POST'])
 def orcavault_hide():
@@ -2739,6 +2758,38 @@ def orcavault_creator_delete():
     hidden.add(str(memory_id))
     save_orcavault_hidden(hidden)
     return jsonify({'success': True})
+
+@app.route('/api/orcavault/set-visibility', methods=['POST'])
+def orcavault_set_visibility():
+    """Owner sets public/private visibility for their own memory.
+    Body: { memoryIdx: "N", wallet: "0x...", signature: "0x...", message: "...", visibility: "public"|"private" }
+    Security: wallet signature is verified — only the signing wallet can set its own memories."""
+    body = request.get_json()
+    if not body:
+        return jsonify({'error': 'No JSON body'}), 400
+    memory_idx  = body.get('memoryIdx')
+    wallet_addr = body.get('wallet', '').strip().lower()
+    signature   = body.get('signature', '')
+    message     = body.get('message', '')
+    visibility  = body.get('visibility', '')
+    if not memory_idx or not wallet_addr or not signature or not message:
+        return jsonify({'error': 'memoryIdx, wallet, signature, and message are required'}), 400
+    if visibility not in ('public', 'private'):
+        return jsonify({'error': 'visibility must be "public" or "private"'}), 400
+    # Verify wallet signature — proves the caller owns the wallet
+    try:
+        msg_hash  = encode_defunct(text=message)
+        recovered = Account.recover_message(msg_hash, signature=signature)
+        if recovered.lower() != wallet_addr:
+            return jsonify({'error': 'Signature mismatch — could not verify wallet ownership'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature verification failed: {str(e)}'}), 401
+    # Store override — frontend only applies it when setter === memory creator
+    overrides = load_orcavault_visibility()
+    overrides[str(memory_idx)] = {'setter': wallet_addr, 'visibility': visibility}
+    save_orcavault_visibility(overrides)
+    print(f"OrcaVault visibility: memory={memory_idx} wallet={wallet_addr} visibility={visibility}")
+    return jsonify({'success': True, 'memoryIdx': str(memory_idx), 'visibility': visibility})
 
 # ─── OrcaVault 3-level moderation (GitHub-backed, survives all redeploys) ──────
 
