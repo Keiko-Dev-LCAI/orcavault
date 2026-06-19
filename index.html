@@ -1918,29 +1918,29 @@ function renderMemoriesGrid() {
     if (!isMemoryVisibleToViewer(m)) return; // non-owners don't see private memories
     const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄',website:'🔗'};
     const icon = typeIcons[m.memType] || '📎';
-    let thumbHtml = '';
-    if (m.memType === 'photo' && m.dataURI && m.dataURI.startsWith('data:image')) {
-      thumbHtml = `<img class="memory-thumb" src="${escHtml(m.dataURI)}" alt="${escHtml(m.title)}" loading="lazy">`;
-    } else if (m.memType === 'video' && m.dataURI && m.dataURI.startsWith('data:video')) {
-      thumbHtml = `<div class="memory-thumb-placeholder video-thumb-gen" data-video-idx="${m.idx}">${icon}</div>`;
-    } else {
-      thumbHtml = `<div class="memory-thumb-placeholder">${icon}</div>`;
-    }
+    const savedThumb   = localStorage.getItem('ov_thumb_' + m.idx);
+    const isOwnerCard  = wallet && currentVaultData && wallet.toLowerCase() === currentVaultData.owner.toLowerCase();
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
-    let cardThumb = thumbHtml;
-    if (m._isChunked) {
+    let cardThumb;
+    if (savedThumb) {
+      cardThumb = `<img class="memory-thumb" src="${savedThumb}" alt="${escHtml(m.title)}" loading="lazy">`;
+    } else if (m.memType === 'photo' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:image')) {
+      cardThumb = `<img class="memory-thumb" src="${escHtml(m.dataURI)}" alt="${escHtml(m.title)}" loading="lazy">`;
+    } else if (m.memType === 'photo' && m._isChunked) {
       const isV3Card = m._source === 'v3relay' || m._contract === 'v3';
-      const cardKey  = (isV3Card ? 'v3-' : 'v2-') + m._memoryId;
-      if (chunkCache.has(cardKey)) {
-        const cd = chunkCache.get(cardKey);
-        if (m.memType === 'photo' && cd && (cd.startsWith('data:image') || cd.startsWith('http'))) {
-          cardThumb = `<img class="memory-thumb" src="${escHtml(cd)}" alt="${escHtml(m.title)}" loading="lazy">`;
-        } else {
-          cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
-        }
-      } else {
-        cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
-      }
+      const cd = chunkCache.has((isV3Card ? 'v3-' : 'v2-') + m._memoryId) ? chunkCache.get((isV3Card ? 'v3-' : 'v2-') + m._memoryId) : null;
+      cardThumb = (cd && (cd.startsWith('data:image') || cd.startsWith('http')))
+        ? `<img class="memory-thumb" src="${escHtml(cd)}" alt="${escHtml(m.title)}" loading="lazy">`
+        : `<div class="memory-thumb-placeholder">${icon}</div>`;
+    } else if (m.memType === 'video' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:video')) {
+      cardThumb = `<div class="memory-thumb-placeholder video-thumb-gen" data-video-idx="${m.idx}">${icon}</div>`;
+    } else if (m.memType === 'video') {
+      const setBtn = isOwnerCard
+        ? `<button onclick="event.stopPropagation();setVideoThumbnail(${m.idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit">📷 Set thumbnail</button>`
+        : '';
+      cardThumb = `<div class="memory-thumb-placeholder" style="position:relative">${icon}${setBtn}</div>`;
+    } else {
+      cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
     }
     const shareUrl = `${location.origin}${location.pathname}?vault=${currentVaultId}&item=${m.idx}`;
     const isPerm   = permRemovedMemories.has(String(m.idx));
@@ -1992,10 +1992,12 @@ function generateVideoThumbnails() {
         canvas.width = 320;
         canvas.height = 180;
         canvas.getContext('2d').drawImage(video, 0, 0, 320, 180);
+        var dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        try { localStorage.setItem('ov_thumb_' + idx, dataUrl); } catch(e) {}
         var img = document.createElement('img');
         img.className = 'memory-thumb';
         img.alt = m.title || 'Video';
-        img.src = canvas.toDataURL('image/jpeg', 0.8);
+        img.src = dataUrl;
         el.replaceWith(img);
       } catch(e) {}
       video.src = '';
@@ -2003,6 +2005,44 @@ function generateVideoThumbnails() {
     video.addEventListener('error', function() {});
     video.load();
   });
+}
+
+function setVideoThumbnail(idx) {
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = function() {
+    var file = input.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = 180;
+        var ctx = canvas.getContext('2d');
+        // crop to fill (cover behavior)
+        var srcRatio = img.width / img.height;
+        var dstRatio = 320 / 180;
+        var sx, sy, sw, sh;
+        if (srcRatio > dstRatio) {
+          sh = img.height; sw = sh * dstRatio;
+          sx = (img.width - sw) / 2; sy = 0;
+        } else {
+          sw = img.width; sh = sw / dstRatio;
+          sx = 0; sy = (img.height - sh) / 2;
+        }
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 320, 180);
+        var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        try { localStorage.setItem('ov_thumb_' + idx, dataUrl); } catch(e) {}
+        renderMemoriesGrid();
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+  input.click();
 }
 
 function viewMemory(idx) {
