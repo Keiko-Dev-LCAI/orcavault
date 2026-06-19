@@ -663,6 +663,32 @@ def _stream_set_build(key, **fields):
         state.update(fields)
 
 
+def _stream_media_path(out_path):
+    """Finished file, or in-progress .building if it has bytes."""
+    building = out_path + '.building'
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        return out_path, True, os.path.getsize(out_path)
+    if os.path.isfile(building) and os.path.getsize(building) > 0:
+        return building, False, os.path.getsize(building)
+    return None, False, 0
+
+
+def _stream_status_payload(status, progress, total, mime, nbytes, **extra):
+    total = int(total or 0)
+    progress = int(progress or 0)
+    return {
+        'status':        status,
+        'progress':      progress,
+        'total':         total,
+        'bytes':         int(nbytes or 0),
+        'percent':       round(100 * progress / total) if total else 0,
+        'partial':       status == 'building' and int(nbytes or 0) > 0,
+        'firstTimeNote': 'One-time relay prep — replays are instant for everyone',
+        'mime':          mime,
+        **extra,
+    }
+
+
 def _fetch_lt_chunk_string(w3_conn, contract_address, video_id, chunk_index, from_block=0):
     """Fetch one VideoChunkStored payload for a chunk index (latest event wins)."""
     from eth_abi import decode as abi_decode
@@ -753,7 +779,12 @@ def _assemble_lighttube_stream(version, video_id):
                                 mime_type = m[5:] or mime_type
                         _append_chunk_string_to_file(outf, chunk_str, carry)
                         fetched += 1
-                _stream_set_build(key, progress=fetched, total=total_chunks)
+                outf.flush()
+                try:
+                    nbytes_now = os.path.getsize(tmp_path)
+                except Exception:
+                    nbytes_now = 0
+                _stream_set_build(key, progress=fetched, total=total_chunks, bytes=nbytes_now)
                 if fetched % 500 == 0 or fetched == total_chunks:
                     print(f"[stream] {key}: assembled {fetched}/{total_chunks} chunks")
             if carry[0]:
@@ -925,7 +956,12 @@ def _assemble_orcavault_stream(version, memory_id):
                                 mime_type = m[5:] or mime_type
                         _append_chunk_string_to_file(outf, chunk_str, carry)
                         fetched += 1
-                _stream_set_build(key, progress=fetched, total=total_chunks)
+                outf.flush()
+                try:
+                    nbytes_now = os.path.getsize(tmp_path)
+                except Exception:
+                    nbytes_now = 0
+                _stream_set_build(key, progress=fetched, total=total_chunks, bytes=nbytes_now)
                 if fetched % 500 == 0 or fetched == total_chunks:
                     print(f"[ov-stream] {key}: assembled {fetched}/{total_chunks} chunks")
             if carry[0]:
@@ -1705,41 +1741,45 @@ def lighttube_stream_status(version, video_id):
         if not contract_address:
             return jsonify({'error': f'LightTube {version} not configured'}), 400
 
-        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
-        total    = int(_get_video_total_chunks_on_chain(w3_local, contract_address, video_id))
-        if total <= 0:
-            return jsonify({'error': 'Video has no chunks'}), 404
-
+        key      = _stream_cache_key(version, video_id)
+        build    = _stream_get_build(key)
         out_path, meta_path = _stream_paths(version, video_id)
-        if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
-            meta = _stream_load_meta(meta_path) or {}
-            return jsonify({
-                'status':   'ready',
-                'progress': total,
-                'total':    total,
-                'mime':     meta.get('mime', 'video/mp4'),
-            })
+        serve_path, complete, nbytes = _stream_media_path(out_path)
 
-        key   = _stream_cache_key(version, video_id)
-        build = _stream_get_build(key)
+        if complete and serve_path:
+            meta = _stream_load_meta(meta_path) or {}
+            total = int(meta.get('totalChunks') or build.get('total') or 0)
+            if total <= 0:
+                w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+                total = int(_get_video_total_chunks_on_chain(w3_local, contract_address, video_id))
+            return jsonify(_stream_status_payload(
+                'ready', total, total, meta.get('mime', 'video/mp4'), nbytes,
+            ))
+
         if not build or build.get('status') not in ('building', 'ready', 'starting'):
             _ensure_stream_build_started(version, video_id)
             build = _stream_get_build(key) or {}
 
-        if build.get('status') == 'error':
-            return jsonify({
-                'status':   'error',
-                'progress': build.get('progress', 0),
-                'total':    total,
-                'error':    build.get('error', 'Build failed'),
-            }), 500
+        total = int(build.get('total') or 0)
+        if total <= 0:
+            w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+            total = int(_get_video_total_chunks_on_chain(w3_local, contract_address, video_id))
+            _stream_set_build(key, total=total)
 
-        return jsonify({
-            'status':   build.get('status', 'building'),
-            'progress': build.get('progress', 0),
-            'total':    total,
-            'mime':     build.get('mime', 'video/mp4'),
-        })
+        if build.get('status') == 'error':
+            return jsonify(_stream_status_payload(
+                'error', build.get('progress', 0), total,
+                build.get('mime', 'video/mp4'), build.get('bytes', nbytes),
+                error=build.get('error', 'Build failed'),
+            )), 500
+
+        if serve_path and not nbytes:
+            nbytes = build.get('bytes', 0)
+        return jsonify(_stream_status_payload(
+            build.get('status', 'building'),
+            build.get('progress', 0), total,
+            build.get('mime', 'video/mp4'), nbytes or build.get('bytes', 0),
+        ))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1751,25 +1791,28 @@ def lighttube_stream_media(version, video_id):
         return jsonify({'error': 'version must be v2 or v3'}), 400
     try:
         out_path, meta_path = _stream_paths(version, video_id)
-        if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 0):
+        serve_path, complete, nbytes = _stream_media_path(out_path)
+        if not serve_path:
             contract_address = _lighttube_contract_for_version(version)
             if not contract_address:
                 return jsonify({'error': f'LightTube {version} not configured'}), 400
-            w3_local = Web3(Web3.HTTPProvider(RPC_URL))
-            total    = int(_get_video_total_chunks_on_chain(w3_local, contract_address, video_id))
             _ensure_stream_build_started(version, video_id)
-            build    = _stream_get_build(_stream_cache_key(version, video_id)) or {}
-            return jsonify({
-                'error':    'Stream not ready',
-                'status':   build.get('status', 'building'),
-                'progress': build.get('progress', 0),
-                'total':    total,
-            }), 503
+            build = _stream_get_build(_stream_cache_key(version, video_id)) or {}
+            total = int(build.get('total') or 0)
+            if total <= 0:
+                w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+                total = int(_get_video_total_chunks_on_chain(w3_local, contract_address, video_id))
+            return jsonify(_stream_status_payload(
+                build.get('status', 'building'), build.get('progress', 0), total,
+                build.get('mime', 'video/mp4'), 0,
+                error='Stream not ready yet',
+            )), 503
 
-        meta = _stream_load_meta(meta_path) or {}
-        mime = meta.get('mime', 'video/mp4')
+        meta = (_stream_load_meta(meta_path) or {}) if complete else {}
+        b    = _stream_get_build(_stream_cache_key(version, video_id)) or {}
+        mime = meta.get('mime') or b.get('mime', 'video/mp4')
         return send_file(
-            out_path,
+            serve_path,
             mimetype=mime,
             conditional=True,
             download_name=f'lighttube-{version}-{video_id}.mp4',
@@ -1788,43 +1831,50 @@ def orcavault_stream_status(version, memory_id):
         if not contract_address:
             return jsonify({'error': f'OrcaVault {version} not configured'}), 400
 
-        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
-        total, mem_type = _get_ov_memory_created(w3_local, contract_address, memory_id)
-        if total <= 0:
-            return jsonify({'error': 'Memory has no chunks'}), 404
-
+        key      = _ov_stream_cache_key(version, memory_id)
+        build    = _stream_get_build(key)
         out_path, meta_path = _ov_stream_paths(version, memory_id)
-        if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
-            meta = _stream_load_meta(meta_path) or {}
-            return jsonify({
-                'status':   'ready',
-                'progress': total,
-                'total':    total,
-                'mime':     meta.get('mime', 'application/octet-stream'),
-                'memType':  meta.get('memType', mem_type),
-            })
+        serve_path, complete, nbytes = _stream_media_path(out_path)
 
-        key   = _ov_stream_cache_key(version, memory_id)
-        build = _stream_get_build(key)
+        if complete and serve_path:
+            meta = _stream_load_meta(meta_path) or {}
+            total = int(meta.get('totalChunks') or build.get('total') or 0)
+            mem_type = meta.get('memType', build.get('memType', ''))
+            if total <= 0:
+                w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+                total, mem_type = _get_ov_memory_created(w3_local, contract_address, memory_id)
+            return jsonify(_stream_status_payload(
+                'ready', total, total, meta.get('mime', 'application/octet-stream'), nbytes,
+                memType=mem_type or meta.get('memType', ''),
+            ))
+
         if not build or build.get('status') not in ('building', 'ready', 'starting'):
             _ensure_ov_stream_build_started(version, memory_id)
             build = _stream_get_build(key) or {}
 
-        if build.get('status') == 'error':
-            return jsonify({
-                'status':   'error',
-                'progress': build.get('progress', 0),
-                'total':    total,
-                'error':    build.get('error', 'Build failed'),
-            }), 500
+        total = int(build.get('total') or 0)
+        mem_type = build.get('memType', '')
+        if total <= 0:
+            w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+            total, mem_type = _get_ov_memory_created(w3_local, contract_address, memory_id)
+            _stream_set_build(key, total=total, memType=mem_type)
 
-        return jsonify({
-            'status':   build.get('status', 'building'),
-            'progress': build.get('progress', 0),
-            'total':    total,
-            'mime':     build.get('mime', 'application/octet-stream'),
-            'memType':  build.get('memType', mem_type),
-        })
+        if build.get('status') == 'error':
+            return jsonify(_stream_status_payload(
+                'error', build.get('progress', 0), total,
+                build.get('mime', 'application/octet-stream'), build.get('bytes', nbytes),
+                memType=mem_type or build.get('memType', ''),
+                error=build.get('error', 'Build failed'),
+            )), 500
+
+        if serve_path and not nbytes:
+            nbytes = build.get('bytes', 0)
+        return jsonify(_stream_status_payload(
+            build.get('status', 'building'),
+            build.get('progress', 0), total,
+            build.get('mime', 'application/octet-stream'), nbytes or build.get('bytes', 0),
+            memType=mem_type or build.get('memType', ''),
+        ))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1836,25 +1886,25 @@ def orcavault_stream_media(version, memory_id):
         return jsonify({'error': 'version must be v2 or v3'}), 400
     try:
         out_path, meta_path = _ov_stream_paths(version, memory_id)
-        if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 0):
+        serve_path, complete, nbytes = _stream_media_path(out_path)
+        if not serve_path:
             contract_address = _orcavault_contract_for_version(version)
             if not contract_address:
                 return jsonify({'error': f'OrcaVault {version} not configured'}), 400
-            w3_local = Web3(Web3.HTTPProvider(RPC_URL))
-            total, _mem_type = _get_ov_memory_created(w3_local, contract_address, memory_id)
             _ensure_ov_stream_build_started(version, memory_id)
             build = _stream_get_build(_ov_stream_cache_key(version, memory_id)) or {}
-            return jsonify({
-                'error':    'Stream not ready',
-                'status':   build.get('status', 'building'),
-                'progress': build.get('progress', 0),
-                'total':    total,
-            }), 503
+            total = int(build.get('total') or 0)
+            return jsonify(_stream_status_payload(
+                build.get('status', 'building'), build.get('progress', 0), total,
+                build.get('mime', 'application/octet-stream'), 0,
+                error='Stream not ready yet',
+            )), 503
 
-        meta = _stream_load_meta(meta_path) or {}
-        mime = meta.get('mime', 'application/octet-stream')
+        meta = (_stream_load_meta(meta_path) or {}) if complete else {}
+        b    = _stream_get_build(_ov_stream_cache_key(version, memory_id)) or {}
+        mime = meta.get('mime') or b.get('mime', 'application/octet-stream')
         return send_file(
-            out_path,
+            serve_path,
             mimetype=mime,
             conditional=True,
             download_name=f'orcavault-{version}-{memory_id}.bin',
@@ -2025,9 +2075,9 @@ def health():
         'lighttube_v2':        LIGHTTUBE_V2_ADDRESS or None,
         'lighttube_scan_fix':  'adaptive-50k-subdivide',
         'lighttube_repair_fix': 'lcai-penny-gas',
-        'lighttube_stream':    'range-cache-v1',
+        'lighttube_stream':    'range-cache-v2-partial',
         'lighttube_stream_cache_dir': LT_STREAM_CACHE_DIR,
-        'orcavault_stream':    'range-cache-v1',
+        'orcavault_stream':    'range-cache-v2-partial',
         'orcavault_stream_cache_dir': OV_STREAM_CACHE_DIR,
         'orcavault_v2':        ORCAVAULT_V2_ADDRESS or None,
         'lighttube_gas_price_wei': LT_CHUNK_GAS_PRICE_WEI,
