@@ -801,20 +801,13 @@ footer a{color:var(--gold);text-decoration:none}
         <button class="btn btn-gold" style="width:100%;justify-content:center;min-height:56px;font-size:20px" onclick="goAddMemory()">+ Add Memory</button>
       </div>
       <div class="sidebar-section">
-        <div class="sidebar-section-title">Share This Archive</div>
-        <div class="share-box">
-          <div class="share-url-row">
-            <input class="share-url-input" id="sv-share-url" readonly>
-            <button class="btn btn-sm btn-gold" onclick="copyVaultLink()" title="Copy link">📋</button>
-          </div>
-          <div class="share-btns">
-            <a class="share-btn share-btn-whatsapp" id="sv-wa" href="#" target="_blank">💬 WhatsApp</a>
-            <a class="share-btn share-btn-twitter" id="sv-tw" href="#" target="_blank">🐦 Twitter</a>
-            <a class="share-btn share-btn-facebook" id="sv-fb" href="#" target="_blank">📘 Facebook</a>
-            <a class="share-btn share-btn-email" id="sv-em" href="#">📧 Email</a>
-          </div>
-          <div class="share-qr" id="sv-qr"></div>
-        </div>
+        <button class="btn btn-gold" style="width:100%;justify-content:center;min-height:56px;font-size:20px" onclick="sidebarShareVault()">📤 Share Archive</button>
+        <input id="sv-share-url" style="display:none" readonly>
+        <a id="sv-wa" href="#" style="display:none"></a>
+        <a id="sv-tw" href="#" style="display:none"></a>
+        <a id="sv-fb" href="#" style="display:none"></a>
+        <a id="sv-em" href="#" style="display:none"></a>
+        <div id="sv-qr" style="display:none"></div>
       </div>
     </div>
     <div class="app-main">
@@ -979,20 +972,13 @@ footer a{color:var(--gold);text-decoration:none}
         </div>
       </div>
       <div class="sidebar-section">
-        <div class="sidebar-section-title">Share This Memory</div>
-        <div class="share-box">
-          <div class="share-url-row">
-            <input class="share-url-input" id="vm-share-url" readonly>
-            <button class="btn btn-sm btn-gold" onclick="copyMemoryLink()" title="Copy link">📋</button>
-          </div>
-          <div class="share-btns">
-            <a class="share-btn share-btn-whatsapp" id="vm-wa" href="#" target="_blank">💬 WhatsApp</a>
-            <a class="share-btn share-btn-twitter" id="vm-tw" href="#" target="_blank">🐦 Twitter</a>
-            <a class="share-btn share-btn-facebook" id="vm-fb" href="#" target="_blank">📘 Facebook</a>
-            <a class="share-btn share-btn-email" id="vm-em" href="#">📧 Email</a>
-          </div>
-          <div class="share-qr" id="vm-qr"></div>
-        </div>
+        <button class="btn btn-gold" style="width:100%;justify-content:center;min-height:56px;font-size:20px" onclick="sidebarShareMemory()">📤 Share Memory</button>
+        <input id="vm-share-url" style="display:none" readonly>
+        <a id="vm-wa" href="#" style="display:none"></a>
+        <a id="vm-tw" href="#" style="display:none"></a>
+        <a id="vm-fb" href="#" style="display:none"></a>
+        <a id="vm-em" href="#" style="display:none"></a>
+        <div id="vm-qr" style="display:none"></div>
       </div>
     </div>
     <div class="app-main">
@@ -3003,10 +2989,12 @@ function setShareLinks(prefix, url, text) {
 function openShareModal(title, sub, url, onViewCallback) {
   document.getElementById('modal-share-title').textContent = title;
   document.getElementById('modal-share-sub').textContent = sub;
+  document.getElementById('modal-share-icon').textContent = onViewCallback ? '🎉' : '📤';
   lastShareUrl = url;
 
   setShareLinks('modal', url, sub);
   const viewBtn = document.getElementById('modal-view-btn');
+  viewBtn.textContent = onViewCallback ? 'View Archive →' : 'Close';
   viewBtn.onclick = () => { closeModal(); if (onViewCallback) onViewCallback(); };
 
   document.getElementById('modal-share').classList.remove('hidden');
@@ -3027,6 +3015,17 @@ function copyMemoryLink() {
 function copyModalLink() {
   const url = document.getElementById('modal-share-url').value;
   navigator.clipboard.writeText(url).then(() => showToast('✅ Link copied!')).catch(() => showToast('Copy failed', true));
+}
+
+function sidebarShareVault() {
+  const url = document.getElementById('sv-share-url').value || '';
+  const name = document.getElementById('sv-name').textContent || 'Archive';
+  openShareModal('Share This Archive', name + ' — stored forever on Lightchain', url, null);
+}
+function sidebarShareMemory() {
+  const url = document.getElementById('vm-share-url').value || '';
+  const title = document.getElementById('vm-title').textContent || 'Memory';
+  openShareModal('Share This Memory', title + ' — stored forever on Lightchain', url, null);
 }
 
 function showViewVaultPrompt() {
@@ -3394,6 +3393,10 @@ async function loadPublicBrowse() {
       });
     } catch(e) { console.warn('V1 browse error:', e); }
 
+    // Build owner→vaultId lookup from V1 memories already loaded
+    const ownerToVault = {};
+    allMems.forEach(m => { if (m.addedBy) ownerToVault[m.addedBy.toLowerCase()] = m.vaultId; });
+
     // V2 — skip chunk entries (idx >= 200000)
     if (readContractV2) {
       try {
@@ -3401,10 +3404,29 @@ async function loadPublicBrowse() {
         evs2.forEach(ev => {
           const [vaultId, itemIndex, addedBy, memType, title, caption, date, dataURI] = ev.args;
           const idx = Number(itemIndex);
+          if (addedBy) ownerToVault[addedBy.toLowerCase()] = Number(vaultId);
           if (idx >= 200000) return; // skip chunk entries
           allMems.push({ vaultId: Number(vaultId), idx, addedBy, memType, title, caption, date, dataURI, txHash: ev.transactionHash, contract: 'v2' });
         });
       } catch(e) { console.warn('V2 browse error:', e); }
+    }
+
+    // V3 — relay-uploaded chunked memories (MemoryCreated events)
+    if (V3_CONTRACT_ADDRESS && readContractV3) {
+      try {
+        const evs3 = await readContractV3.queryFilter(readContractV3.filters.MemoryCreated(), 0, 'latest');
+        evs3.forEach(ev => {
+          const memoryId    = Number(ev.args[0]);
+          const owner       = ev.args[1];
+          const title       = ev.args[2];
+          const caption     = ev.args[3];
+          const memType     = ev.args[4];
+          const totalChunks = Number(ev.args[5]);
+          const timestamp   = Number(ev.args[7]);
+          const vaultId     = ownerToVault[owner.toLowerCase()] ?? 0;
+          allMems.push({ vaultId, idx: 300000 + memoryId, _memoryId: memoryId, addedBy: owner, memType, title, caption, date: timestamp ? new Date(timestamp * 1000).toISOString() : '', dataURI: null, txHash: ev.transactionHash, contract: 'v3', _isChunked: true, _totalChunks: totalChunks });
+        });
+      } catch(e) { console.warn('V3 browse error:', e); }
     }
 
     // Parse privacy + filter
@@ -3453,6 +3475,7 @@ function renderBrowseGrid(cat) {
         <div class="memory-type-badge">${icon} ${capitalize(m.memType)}</div>
         <div class="memory-card-title">${escHtml(m.title)}</div>
         ${dateStr ? `<div class="memory-card-date">${dateStr}</div>` : ''}
+        ${m._totalChunks ? `<div style="font-size:14px;color:var(--muted);margin-top:2px">${m._totalChunks} chunks</div>` : ''}
         <div style="font-size:14px;color:var(--muted);margin-top:4px">Archive #${m.vaultId}</div>
       </div>
       <div class="chain-link-row">
@@ -3496,13 +3519,13 @@ function confirmUploadWarning() {
   }
 }
 </script>
-<footer style="background:var(--bg2);border-top:1px solid var(--border);padding:18px 32px;text-align:center;font-size:15px;color:var(--muted);line-height:1.65;margin-top:40px">
-  Free to browse · Uploads may require a small LCAI fee · Content that violates community standards will be hidden from this app. Note: all uploads are permanently recorded on the Lightchain blockchain and cannot be erased from the chain — only removed from this interface.
+<footer style="background:var(--bg2);border-top:1px solid var(--border);padding:18px 32px;text-align:center;font-size:18px;color:var(--text);line-height:1.65;margin-top:40px">
+  Free to browse · Uploads require a small LCAI fee · Content that violates community standards will be hidden from this app. Note: all uploads are permanently recorded on the Lightchain blockchain and cannot be erased from the chain — only removed from this interface.
 </footer>
 <!-- X HANDLE -->
-<div style="text-align:center;padding:6px 16px 12px;font-size:13px;opacity:0.65;"><a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" style="color:#9b7fe8;text-decoration:none;font-weight:600;">𝕏 @KeikoDevLCAI</a></div>
+<div style="text-align:center;padding:6px 16px 12px;font-size:18px;"><a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" style="color:#9b7fe8;text-decoration:none;font-weight:600;">𝕏 @KeikoDevLCAI</a></div>
 <!-- dev contact footer -->
-<div style="text-align:center;padding:8px 16px 16px;font-size:13px;opacity:0.5;">Questions or ideas? <a href="#" onclick="(function(){navigator.clipboard.writeText('0xA3a653a8cBA0710ff57Ac34E2278C603B4259FD3').catch(function(){});window.open('https://orcamail.ai','_blank');var t=document.getElementById('_dctoast');if(t){t.style.display='block';setTimeout(function(){t.style.display='none'},3000);}})();return false;" style="color:#6c47ff;font-weight:600;text-decoration:none;">Contact Developer via OrcaMail &#x1F42C;</a></div>
+<div style="text-align:center;padding:8px 16px 16px;font-size:18px;">Questions or ideas? <a href="#" onclick="(function(){navigator.clipboard.writeText('0xA3a653a8cBA0710ff57Ac34E2278C603B4259FD3').catch(function(){});window.open('https://orcamail.ai','_blank');var t=document.getElementById('_dctoast');if(t){t.style.display='block';setTimeout(function(){t.style.display='none'},3000);}})();return false;" style="color:#6c47ff;font-weight:600;text-decoration:none;">Contact Developer via OrcaMail &#x1F42C;</a></div>
 <div id="_dctoast" style="display:none;position:fixed;bottom:24px;right:24px;background:#6c47ff;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 2px 16px rgba(0,0,0,.4);">Wallet copied! Opening OrcaMail&#x2026;</div>
 </body>
 </html>
