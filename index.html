@@ -2019,8 +2019,18 @@ function viewMemory(idx) {
   loadAndShowMemory(currentVaultId, idx);
 }
 
+function formatStreamEta(seconds) {
+  if (!seconds || !isFinite(seconds) || seconds < 0) return '';
+  if (seconds < 90) return `~${Math.ceil(seconds)}s left`;
+  if (seconds < 3600) return `~${Math.ceil(seconds / 60)} min left`;
+  return `~${(seconds / 3600).toFixed(1)} hr left`;
+}
+
 async function waitForOvRelayStream(statusUrl, totalChunks, onProgress) {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let lastProgress = 0;
+  let lastTime     = Date.now();
+  let rate         = 0;
   for (let attempt = 0; attempt < 7200; attempt++) {
     const res  = await fetch(statusUrl);
     const data = await res.json().catch(() => ({}));
@@ -2032,11 +2042,19 @@ async function waitForOvRelayStream(statusUrl, totalChunks, onProgress) {
     }
     const total    = data.total || totalChunks;
     const progress = data.progress || 0;
-    if (onProgress) onProgress(progress, total);
+    const now      = Date.now();
+    if (progress > lastProgress && now > lastTime) {
+      rate = (progress - lastProgress) / ((now - lastTime) / 1000);
+      lastProgress = progress;
+      lastTime     = now;
+    }
+    const eta = rate > 0 ? formatStreamEta((total - progress) / rate) : '';
+    if (onProgress) onProgress(data, eta);
     if (data.status === 'ready') return data;
-    await sleep(3000);
+    if (data.partial) return data;
+    await sleep(2000);
   }
-  throw new Error('Stream preparation timed out — try again in a few minutes');
+  throw new Error('Stream preparation timed out — try again shortly');
 }
 
 async function loadAndShowMemory(vaultId, idx) {
@@ -2087,10 +2105,28 @@ async function loadAndShowMemory(vaultId, idx) {
       if (chunkCache.has(cacheKey)) {
         mem = { ...mem, dataURI: chunkCache.get(cacheKey) };
       } else {
-        showLoading('Preparing memory stream…', `Relay assembling ${mem._totalChunks} chunks — large files may take a while`);
-        await waitForOvRelayStream(statusUrl, mem._totalChunks, (progress, total) => {
-          showLoading('Preparing memory stream…', `${progress.toLocaleString()} / ${total.toLocaleString()} chunks on relay`);
-        });
+        const note = 'One-time prep on relay — replays are instant for everyone';
+        const updatePrep = (data, eta) => {
+          const total    = data.total || mem._totalChunks;
+          const progress = data.progress || 0;
+          const pct      = data.percent || Math.round(progress / total * 100);
+          const suffix   = eta ? ` · ${eta}` : '';
+          if (data.status === 'ready') {
+            showLoading('Ready', 'Starting playback…');
+          } else if (data.partial) {
+            showLoading(`Buffering… ${pct}%`, `${note}${suffix}`);
+          } else {
+            showLoading(`Preparing… ${pct}%`, `${progress.toLocaleString()} / ${total.toLocaleString()} chunks · ${note}${suffix}`);
+          }
+        };
+        let result = await waitForOvRelayStream(statusUrl, mem._totalChunks, updatePrep);
+        while (result.status !== 'ready') {
+          await new Promise(r => setTimeout(r, 2000));
+          const res  = await fetch(statusUrl);
+          result = await res.json().catch(() => ({}));
+          updatePrep(result, '');
+          if (result.status === 'error') throw new Error(result.error || 'Relay could not build stream');
+        }
         if (mem.memType === 'text') {
           const textRes = await fetch(streamUrl);
           if (!textRes.ok) throw new Error('Could not load text memory from relay');
