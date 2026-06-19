@@ -471,14 +471,16 @@ footer a{color:var(--gold);text-decoration:none}
 .admin-mod-item.restore:hover{background:rgba(82,201,127,0.15)}
 
 /* ── MOBILE LAYOUT FIXES (Fix 1, 2, 3 — June 2026) ── */
-/* Fix 1: X link — allow it to shrink + ellipsis so @KeikoDevLCAI stays visible */
-#nav-x-link{flex-shrink:1 !important;min-width:0;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:600px){
-  /* Fix 1: Hide Browse label text to free nav space for X username */
+  /* Fix 1: X link — hide @handle text, keep 𝕏 icon visible in nav */
   .browse-label{display:none}
-  /* Fix 2: How-It-Works cards — stack vertically, full width */
-  .how-grid{grid-template-columns:1fr !important;gap:10px !important}
-  .how-card{padding:14px 16px !important}
+  #nav-x-link .x-handle{display:none}
+  /* Fix 2: How-It-Works cards — 2×2 grid, compact */
+  .how-grid{grid-template-columns:1fr 1fr !important;gap:8px !important}
+  .how-card{padding:10px 8px !important}
+  .how-num{width:34px !important;height:34px !important;font-size:17px !important;margin-bottom:6px !important}
+  .how-title{font-size:15px !important;margin-bottom:4px !important}
+  .how-desc{font-size:13px !important}
   /* Fix 3: Compact hero so bottom buttons reach the screen */
   .hero{padding:18px 18px 10px !important}
   .hero-eyebrow{display:none}
