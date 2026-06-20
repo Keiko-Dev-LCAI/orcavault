@@ -69,6 +69,7 @@ ORCAVAULT_HIDDEN_SEED    = {s.strip() for s in os.environ.get("ORCAVAULT_HIDDEN_
 LIGHTTUBE_V2_ADDRESS     = os.environ.get("LIGHTTUBE_V2_ADDRESS", "")
 LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
+ORCAVAULT_THUMBS_DIR     = os.environ.get("ORCAVAULT_THUMBS_DIR", "/data/ov_thumbs")
 LIGHTTUBE_REPAIR_CACHE_DIR = os.environ.get("LIGHTTUBE_REPAIR_CACHE_DIR", "/data/lt_repair_cache")
 LT_STREAM_CACHE_DIR      = os.environ.get("LT_STREAM_CACHE_DIR", "/data/lt_stream_cache")
 OV_STREAM_CACHE_DIR      = os.environ.get("OV_STREAM_CACHE_DIR", "/data/ov_stream_cache")
@@ -2018,6 +2019,165 @@ def lighttube_set_thumbnail():
             with open(thumb_path, 'wb') as f:
                 f.write(base64.b64decode(thumb_data))
         return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': f'Save failed: {e}'}), 500
+
+
+# ─── Lightchain Archives (OrcaVault) thumbnail endpoints ─────────────────────
+
+def _ov_thumb_filename(vault_id, item_idx):
+    return f"{int(vault_id)}_{int(item_idx)}.jpg"
+
+
+def save_ov_thumbnail_github(filename, data_b64):
+    """Commit a memory thumbnail JPEG to the orcavault GitHub repo."""
+    if not GITHUB_TOKEN:
+        raise Exception("GITHUB_TOKEN not configured")
+    if ',' in data_b64:
+        data_b64 = data_b64.split(',', 1)[1]
+    path    = f"thumbs/{filename}"
+    api_url = f"https://api.github.com/repos/{ORCAVAULT_GITHUB_REPO}/contents/{path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+    }
+    sha = None
+    try:
+        req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            sha = json.loads(r.read()).get("sha")
+    except Exception:
+        pass
+    body = {"message": f"Archive thumbnail {filename}", "content": data_b64, "branch": ORCAVAULT_GITHUB_BRANCH}
+    if sha:
+        body["sha"] = sha
+    req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        json.loads(r.read())
+        return f"https://raw.githubusercontent.com/{ORCAVAULT_GITHUB_REPO}/{ORCAVAULT_GITHUB_BRANCH}/thumbs/{filename}"
+
+
+def _verify_orcavault_memory_owner(vault_id, item_idx, wallet):
+    """Return True if wallet owns or created the memory."""
+    wallet = (wallet or '').strip().lower()
+    item_idx = int(item_idx)
+    vault_id = int(vault_id)
+    w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+    VAULT_ABI = [{"inputs":[{"name":"","type":"uint256"}],"name":"vaults","outputs":[
+        {"name":"owner","type":"address"},{"name":"name","type":"string"},{"name":"template","type":"string"},
+        {"name":"description","type":"string"},{"name":"createdAt","type":"uint256"},{"name":"exists","type":"bool"}
+    ],"stateMutability":"view","type":"function"}]
+    MEMORY_CREATED_ABI = [{"anonymous":False,"inputs":[
+        {"indexed":True,"name":"memoryId","type":"uint256"},{"indexed":True,"name":"owner","type":"address"},
+        {"indexed":False,"name":"title","type":"string"},{"indexed":False,"name":"description","type":"string"},
+        {"indexed":False,"name":"mediaType","type":"string"},{"indexed":False,"name":"totalChunks","type":"uint256"},
+        {"indexed":False,"name":"template","type":"string"},{"indexed":False,"name":"timestamp","type":"uint256"}
+    ],"name":"MemoryCreated","type":"event"}]
+    MEMORY_ADDED_ABI = [{"anonymous":False,"inputs":[
+        {"indexed":True,"name":"vaultId","type":"uint256"},{"indexed":True,"name":"itemIndex","type":"uint256"},
+        {"indexed":True,"name":"addedBy","type":"address"},{"indexed":False,"name":"memType","type":"string"},
+        {"indexed":False,"name":"title","type":"string"},{"indexed":False,"name":"caption","type":"string"},
+        {"indexed":False,"name":"date","type":"string"},{"indexed":False,"name":"dataURI","type":"string"}
+    ],"name":"MemoryAdded","type":"event"}]
+
+    if item_idx >= 300000:
+        memory_id = item_idx - 300000
+        addr = V3_CONTRACT_ADDRESS
+        if not addr:
+            return False
+        ct = w3_local.eth.contract(address=Web3.to_checksum_address(addr), abi=MEMORY_CREATED_ABI)
+        logs = ct.events.MemoryCreated().get_logs(fromBlock=0, argument_filters={'memoryId': memory_id})
+        if not logs:
+            return False
+        return logs[-1]['args']['owner'].lower() == wallet
+
+    if item_idx >= 200000:
+        memory_id = item_idx - 200000
+        addr = ORCAVAULT_V2_ADDRESS
+        if not addr:
+            return False
+        ct = w3_local.eth.contract(address=Web3.to_checksum_address(addr), abi=MEMORY_CREATED_ABI)
+        logs = ct.events.MemoryCreated().get_logs(fromBlock=0, argument_filters={'memoryId': memory_id})
+        if not logs:
+            return False
+        return logs[-1]['args']['owner'].lower() == wallet
+
+    v1_addr = os.environ.get("ORCAVAULT_V1_ADDRESS", "0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e")
+    for addr in (v1_addr, ORCAVAULT_V2_ADDRESS):
+        if not addr:
+            continue
+        try:
+            ct = w3_local.eth.contract(address=Web3.to_checksum_address(addr), abi=MEMORY_ADDED_ABI)
+            logs = ct.events.MemoryAdded().get_logs(
+                fromBlock=0,
+                argument_filters={'vaultId': vault_id, 'itemIndex': item_idx}
+            )
+            if logs and logs[-1]['args']['addedBy'].lower() == wallet:
+                return True
+        except Exception:
+            continue
+    try:
+        ct = w3_local.eth.contract(address=Web3.to_checksum_address(v1_addr), abi=VAULT_ABI)
+        vm = ct.functions.vaults(vault_id).call()
+        if vm[5] and vm[0].lower() == wallet:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+@app.route('/api/orcavault/thumb/<int:vault_id>/<int:item_idx>', methods=['GET'])
+def orcavault_get_thumb(vault_id, item_idx):
+    """Serve stored thumbnail for a Lightchain Archives memory."""
+    thumb_path = os.path.join(ORCAVAULT_THUMBS_DIR, _ov_thumb_filename(vault_id, item_idx))
+    if not os.path.exists(thumb_path):
+        return '', 404
+    return send_file(thumb_path, mimetype='image/jpeg')
+
+
+@app.route('/api/orcavault/set-thumbnail', methods=['POST'])
+def orcavault_set_thumbnail():
+    """
+    Allow a memory creator to set/update a public browse thumbnail.
+    Body JSON: {vaultId, itemIdx, wallet, signature, timestamp, thumbnail}
+    """
+    data      = request.get_json(force=True) or {}
+    vault_id  = data.get('vaultId')
+    item_idx  = data.get('itemIdx')
+    wallet    = (data.get('wallet', '') or '').strip().lower()
+    signature = (data.get('signature', '') or '').strip()
+    timestamp = (data.get('timestamp', '') or '').strip()
+    thumbnail = (data.get('thumbnail', '') or '').strip()
+
+    if vault_id is None or item_idx is None or not all([wallet, signature, thumbnail]):
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    message = (
+        f"Set thumbnail for Lightchain Archives memory vault={vault_id} item={item_idx}\n"
+        f"Wallet: {wallet}\nTimestamp: {timestamp}"
+    )
+    try:
+        msg       = encode_defunct(text=message)
+        recovered = Account.recover_message(msg, signature=signature).lower()
+        if recovered != wallet:
+            return jsonify({'error': 'Signature does not match wallet'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature error: {e}'}), 401
+
+    if not _verify_orcavault_memory_owner(vault_id, item_idx, wallet):
+        return jsonify({'error': 'Not the memory creator or vault owner'}), 403
+
+    try:
+        filename = _ov_thumb_filename(vault_id, item_idx)
+        if GITHUB_TOKEN:
+            save_ov_thumbnail_github(filename, thumbnail)
+        os.makedirs(ORCAVAULT_THUMBS_DIR, exist_ok=True)
+        thumb_path = os.path.join(ORCAVAULT_THUMBS_DIR, filename)
+        thumb_data = thumbnail.split(',', 1)[1] if ',' in thumbnail else thumbnail
+        with open(thumb_path, 'wb') as f:
+            f.write(base64.b64decode(thumb_data))
+        return jsonify({'success': True, 'url': f'/api/orcavault/thumb/{vault_id}/{item_idx}'})
     except Exception as e:
         return jsonify({'error': f'Save failed: {e}'}), 500
 
