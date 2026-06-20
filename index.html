@@ -2037,6 +2037,53 @@ function githubMemoryThumbUrl(vaultId, idx) {
   return `${OV_THUMB_GITHUB_BASE}/${memoryThumbFilename(vaultId, idx)}`;
 }
 
+function memoryThumbGroupKey(title) {
+  return (title || '').toLowerCase()
+    .replace(/\s+with\s+sound\s*$/i, '')
+    .replace(/\s+without\s+sound\s*$/i, '')
+    .replace(/\s*\(with\s+sound\)\s*$/i, '')
+    .replace(/\s*\(no\s+sound\)\s*$/i, '')
+    .replace(/\s*\(silent\)\s*$/i, '')
+    .trim();
+}
+
+function getThumbSiblingMemories(vaultId, idx, title, memList) {
+  const list = memList || currentMemories || _browseAllMemories || [];
+  const key = memoryThumbGroupKey(title);
+  if (!key) return [];
+  const vid = vaultId != null ? vaultId : currentVaultId;
+  return list.filter(m => {
+    if (m.idx === idx) return false;
+    const mVault = m.vaultId != null ? m.vaultId : vid;
+    if (mVault !== vid) return false;
+    if (memoryThumbGroupKey(m.title) !== key) return false;
+    return (m.memType || 'video') === 'video';
+  });
+}
+
+function getSavedThumbForMemory(m) {
+  const own = localStorage.getItem('ov_thumb_' + m.idx);
+  if (own) return own;
+  const vaultId = m.vaultId != null ? m.vaultId : currentVaultId;
+  for (const s of getThumbSiblingMemories(vaultId, m.idx, m.title)) {
+    const t = localStorage.getItem('ov_thumb_' + s.idx);
+    if (t) return t;
+  }
+  return null;
+}
+
+function getThumbUrlCandidates(vaultId, idx, title) {
+  const urls = [];
+  const add = u => { if (u && !urls.includes(u)) urls.push(u); };
+  add(relayMemoryThumbUrl(vaultId, idx));
+  add(githubMemoryThumbUrl(vaultId, idx));
+  for (const s of getThumbSiblingMemories(vaultId, idx, title)) {
+    add(relayMemoryThumbUrl(vaultId, s.idx));
+    add(githubMemoryThumbUrl(vaultId, s.idx));
+  }
+  return urls;
+}
+
 function ovThumbImgHtml(vaultId, idx, title, primarySrc) {
   const relay = relayMemoryThumbUrl(vaultId, idx);
   const github = githubMemoryThumbUrl(vaultId, idx);
@@ -2059,18 +2106,26 @@ function ovThumbImgError(img) {
   img.src = fb[0];
 }
 
-async function uploadMemoryThumbnail(vaultId, idx, dataUrl) {
+async function uploadMemoryThumbnail(vaultId, itemIdxs, dataUrl) {
   if (!wallet || !RELAY_URL || !dataUrl) return false;
+  const idxList = [...new Set((Array.isArray(itemIdxs) ? itemIdxs : [itemIdxs]).map(Number))].sort((a, b) => a - b);
+  if (!idxList.length) return false;
   try {
     const provider = new ethers.BrowserProvider(activeProvider || window.ethereum);
     const signer = await provider.getSigner();
     const timestamp = Date.now().toString();
-    const message = `Set thumbnail for Lightchain Archives memory vault=${vaultId} item=${idx}\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${timestamp}`;
+    const itemsStr = idxList.join(',');
+    const message = idxList.length === 1
+      ? `Set thumbnail for Lightchain Archives memory vault=${vaultId} item=${idxList[0]}\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${timestamp}`
+      : `Set thumbnail for Lightchain Archives memory vault=${vaultId} items=${itemsStr}\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${timestamp}`;
     const signature = await signer.signMessage(message);
+    const body = { vaultId, wallet: wallet.toLowerCase(), signature, timestamp, thumbnail: dataUrl };
+    if (idxList.length === 1) body.itemIdx = idxList[0];
+    else body.itemIdxs = idxList;
     const res = await fetch(`${RELAY_URL}/api/orcavault/set-thumbnail`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vaultId, itemIdx: idx, wallet: wallet.toLowerCase(), signature, timestamp, thumbnail: dataUrl })
+      body: JSON.stringify(body)
     });
     const data = await res.json();
     return res.ok && data.success;
@@ -2080,25 +2135,53 @@ async function uploadMemoryThumbnail(vaultId, idx, dataUrl) {
   }
 }
 
-function persistMemoryThumbnail(vaultId, idx, dataUrl) {
-  try { localStorage.setItem('ov_thumb_' + idx, dataUrl); } catch(e) {}
-  uploadMemoryThumbnail(vaultId, idx, dataUrl).then(ok => {
-    if (ok) showToast('Thumbnail saved for public browse ✅');
+function persistMemoryThumbnail(vaultId, idx, dataUrl, title) {
+  const mem = currentMemories.find(m => m.idx === idx);
+  const memTitle = title || mem?.title || '';
+  const siblings = getThumbSiblingMemories(vaultId, idx, memTitle);
+  const allIdx = [idx, ...siblings.map(s => s.idx)];
+  allIdx.forEach(i => { try { localStorage.setItem('ov_thumb_' + i, dataUrl); } catch(e) {} });
+  uploadMemoryThumbnail(vaultId, allIdx, dataUrl).then(ok => {
+    if (ok) {
+      const n = allIdx.length;
+      showToast(n > 1 ? `Thumbnail saved for ${n} related videos ✅` : 'Thumbnail saved for public browse ✅');
+    }
   });
+}
+
+function copyThumbnailFromSibling(idx) {
+  const mem = currentMemories.find(m => m.idx === idx);
+  if (!mem) return;
+  const vaultId = currentVaultId;
+  const siblings = getThumbSiblingMemories(vaultId, idx, mem.title);
+  for (const s of siblings) {
+    const thumb = localStorage.getItem('ov_thumb_' + s.idx);
+    if (thumb) {
+      persistMemoryThumbnail(vaultId, idx, thumb, mem.title);
+      renderMemoriesGrid();
+      return;
+    }
+  }
+  showToast('Set a thumbnail on the matching video first (e.g. Keiko)', true);
 }
 
 async function syncLocalThumbsToRelay() {
   if (!wallet || !currentVaultId) return;
+  const synced = new Set();
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (!key || !key.startsWith('ov_thumb_')) continue;
     const idx = Number(key.slice('ov_thumb_'.length));
+    if (synced.has(idx)) continue;
     const dataUrl = localStorage.getItem(key);
     const mem = currentMemories.find(m => m.idx === idx);
     if (!mem || !dataUrl) continue;
     const creator = (mem.addedBy || '').toLowerCase();
     if (creator && wallet.toLowerCase() !== creator) continue;
-    await uploadMemoryThumbnail(currentVaultId, idx, dataUrl);
+    const siblings = getThumbSiblingMemories(currentVaultId, idx, mem.title);
+    const allIdx = [idx, ...siblings.map(s => s.idx)];
+    allIdx.forEach(j => { try { localStorage.setItem('ov_thumb_' + j, dataUrl); } catch(e) {} synced.add(j); });
+    await uploadMemoryThumbnail(currentVaultId, allIdx, dataUrl);
   }
 }
 
@@ -2108,15 +2191,17 @@ function buildMemoryThumbHtml(m, opts = {}) {
   const vaultId = m.vaultId != null ? m.vaultId : currentVaultId;
   const idx = m.idx;
   const isOwnerCard = opts.isOwnerCard === true;
-  const savedThumb = localStorage.getItem('ov_thumb_' + idx);
+  const savedThumb = getSavedThumbForMemory(m);
+  const urlCandidates = getThumbUrlCandidates(vaultId, idx, m.title);
 
   if (savedThumb) {
     return ovThumbImgHtml(vaultId, idx, m.title, savedThumb);
   }
-  const relay = relayMemoryThumbUrl(vaultId, idx);
-  const github = githubMemoryThumbUrl(vaultId, idx);
-  if (relay || github) {
-    return ovThumbImgHtml(vaultId, idx, m.title, relay || github);
+  if (urlCandidates.length) {
+    const primary = urlCandidates[0];
+    const fallbacks = urlCandidates.slice(1);
+    const fbAttr = fallbacks.length ? ` data-fb="${escHtml(fallbacks.join('|'))}"` : '';
+    return `<img class="memory-thumb" src="${escHtml(primary)}" alt="${escHtml(m.title || '')}" loading="lazy"${fbAttr} onerror="ovThumbImgError(this)">`;
   }
   if (m.memType === 'photo' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:image')) {
     return ovThumbImgHtml(vaultId, idx, m.title, m.dataURI);
@@ -2134,15 +2219,23 @@ function buildMemoryThumbHtml(m, opts = {}) {
   if (m.memType === 'video' && m._isChunked) {
     const ver = (m._contract === 'v3' || m._source === 'v3relay') ? 'v3' : 'v2';
     const memId = m._memoryId;
+    const siblings = getThumbSiblingMemories(vaultId, idx, m.title);
+    const siblingHasThumb = siblings.some(s => localStorage.getItem('ov_thumb_' + s.idx));
     const setBtn = isOwnerCard
-      ? `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">📷 Set thumbnail</button>`
+      ? (siblingHasThumb
+        ? `<button onclick="event.stopPropagation();copyThumbnailFromSibling(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">📷 Same thumbnail</button>`
+        : `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">📷 Set thumbnail</button>`)
       : '';
     if (memId != null && RELAY_URL) {
       return `<div class="memory-thumb-placeholder browse-stream-thumb-gen" style="position:relative" data-stream-url="${escHtml(`${RELAY_URL}/api/media/stream/orcavault/${ver}/${memId}`)}" data-vault-id="${vaultId}" data-idx="${idx}" data-icon="${icon}">${icon}${setBtn}</div>`;
     }
   }
   if (m.memType === 'video' && isOwnerCard) {
-    const setBtn = `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit">📷 Set thumbnail</button>`;
+    const siblings = getThumbSiblingMemories(vaultId, idx, m.title);
+    const siblingHasThumb = siblings.some(s => localStorage.getItem('ov_thumb_' + s.idx));
+    const setBtn = siblingHasThumb
+      ? `<button onclick="event.stopPropagation();copyThumbnailFromSibling(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit">📷 Same thumbnail</button>`
+      : `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit">📷 Set thumbnail</button>`;
     return `<div class="memory-thumb-placeholder" style="position:relative">${icon}${setBtn}</div>`;
   }
   return `<div class="memory-thumb-placeholder">${icon}</div>`;

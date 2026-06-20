@@ -2136,27 +2136,57 @@ def orcavault_get_thumb(vault_id, item_idx):
     return send_file(thumb_path, mimetype='image/jpeg')
 
 
+def _save_orcavault_thumb_file(vault_id, item_idx, thumbnail):
+    filename = _ov_thumb_filename(vault_id, item_idx)
+    if GITHUB_TOKEN:
+        save_ov_thumbnail_github(filename, thumbnail)
+    os.makedirs(ORCAVAULT_THUMBS_DIR, exist_ok=True)
+    thumb_path = os.path.join(ORCAVAULT_THUMBS_DIR, filename)
+    thumb_data = thumbnail.split(',', 1)[1] if ',' in thumbnail else thumbnail
+    with open(thumb_path, 'wb') as f:
+        f.write(base64.b64decode(thumb_data))
+    return filename
+
+
 @app.route('/api/orcavault/set-thumbnail', methods=['POST'])
 def orcavault_set_thumbnail():
     """
     Allow a memory creator to set/update a public browse thumbnail.
-    Body JSON: {vaultId, itemIdx, wallet, signature, timestamp, thumbnail}
+    Body JSON: {vaultId, itemIdx|itemIdxs[], wallet, signature, timestamp, thumbnail}
     """
     data      = request.get_json(force=True) or {}
     vault_id  = data.get('vaultId')
     item_idx  = data.get('itemIdx')
+    item_idxs = data.get('itemIdxs')
     wallet    = (data.get('wallet', '') or '').strip().lower()
     signature = (data.get('signature', '') or '').strip()
     timestamp = (data.get('timestamp', '') or '').strip()
     thumbnail = (data.get('thumbnail', '') or '').strip()
 
-    if vault_id is None or item_idx is None or not all([wallet, signature, thumbnail]):
+    if item_idxs is not None:
+        try:
+            idx_list = sorted({int(x) for x in item_idxs})
+        except (TypeError, ValueError):
+            return jsonify({'error': 'itemIdxs must be a list of integers'}), 400
+    elif item_idx is not None:
+        idx_list = [int(item_idx)]
+    else:
+        idx_list = []
+
+    if vault_id is None or not idx_list or not all([wallet, signature, thumbnail]):
         return jsonify({'error': 'Missing required fields'}), 400
 
-    message = (
-        f"Set thumbnail for Lightchain Archives memory vault={vault_id} item={item_idx}\n"
-        f"Wallet: {wallet}\nTimestamp: {timestamp}"
-    )
+    items_str = ','.join(str(i) for i in idx_list)
+    if len(idx_list) == 1:
+        message = (
+            f"Set thumbnail for Lightchain Archives memory vault={vault_id} item={idx_list[0]}\n"
+            f"Wallet: {wallet}\nTimestamp: {timestamp}"
+        )
+    else:
+        message = (
+            f"Set thumbnail for Lightchain Archives memory vault={vault_id} items={items_str}\n"
+            f"Wallet: {wallet}\nTimestamp: {timestamp}"
+        )
     try:
         msg       = encode_defunct(text=message)
         recovered = Account.recover_message(msg, signature=signature).lower()
@@ -2165,19 +2195,16 @@ def orcavault_set_thumbnail():
     except Exception as e:
         return jsonify({'error': f'Signature error: {e}'}), 401
 
-    if not _verify_orcavault_memory_owner(vault_id, item_idx, wallet):
-        return jsonify({'error': 'Not the memory creator or vault owner'}), 403
+    for idx in idx_list:
+        if not _verify_orcavault_memory_owner(vault_id, idx, wallet):
+            return jsonify({'error': f'Not the memory creator or vault owner for item {idx}'}), 403
 
     try:
-        filename = _ov_thumb_filename(vault_id, item_idx)
-        if GITHUB_TOKEN:
-            save_ov_thumbnail_github(filename, thumbnail)
-        os.makedirs(ORCAVAULT_THUMBS_DIR, exist_ok=True)
-        thumb_path = os.path.join(ORCAVAULT_THUMBS_DIR, filename)
-        thumb_data = thumbnail.split(',', 1)[1] if ',' in thumbnail else thumbnail
-        with open(thumb_path, 'wb') as f:
-            f.write(base64.b64decode(thumb_data))
-        return jsonify({'success': True, 'url': f'/api/orcavault/thumb/{vault_id}/{item_idx}'})
+        saved = []
+        for idx in idx_list:
+            _save_orcavault_thumb_file(vault_id, idx, thumbnail)
+            saved.append(f'/api/orcavault/thumb/{vault_id}/{idx}')
+        return jsonify({'success': True, 'urls': saved, 'count': len(saved)})
     except Exception as e:
         return jsonify({'error': f'Save failed: {e}'}), 500
 
