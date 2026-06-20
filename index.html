@@ -148,6 +148,22 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .tmpl-name{font-size:22px;font-weight:800;margin-bottom:8px;color:var(--text)}
 .tmpl-desc{font-size:17px;color:var(--muted);line-height:1.55}
 
+/* Create Archive step 1 — all 9 templates visible without scrolling */
+#screen-create.active{overflow-y:auto}
+#screen-create .create-shell{padding:14px 20px 16px;height:calc(100vh - 68px);display:flex;align-items:stretch;box-sizing:border-box}
+#screen-create .form-card{padding:22px 28px 20px;max-width:1180px;width:100%;margin:0 auto;display:flex;flex-direction:column;max-height:100%;box-sizing:border-box}
+#screen-create .step-indicator{margin-bottom:14px}
+#screen-create .create-step-heading{font-size:24px;font-weight:800;margin-bottom:4px}
+#screen-create .create-step-sub{color:var(--muted);margin-bottom:12px;font-size:16px;line-height:1.4}
+#screen-create #create-template-grid{grid-template-columns:repeat(3,1fr);gap:10px;flex:1;align-content:start}
+#screen-create .template-card{padding:12px 14px;min-height:0;border-radius:12px;border-width:1.5px}
+#screen-create .template-card:hover,#screen-create .template-card.selected{transform:none}
+#screen-create .tmpl-emoji{font-size:26px;margin-bottom:4px;line-height:1}
+#screen-create .tmpl-name{font-size:15px;font-weight:800;margin-bottom:3px;line-height:1.2}
+#screen-create .tmpl-desc{font-size:12.5px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#screen-create .create-step-footer{margin-top:12px;text-align:right;flex-shrink:0}
+#screen-create #create-step1{display:flex;flex-direction:column;flex:1;min-height:0}
+
 /* ── CARDS ── */
 .card{background:var(--bg3);border:1px solid var(--border);border-radius:14px;padding:24px}
 .card+.card{margin-top:14px}
@@ -353,11 +369,17 @@ footer a{color:var(--gold);text-decoration:none}
   .type-picker{grid-template-columns:repeat(3,1fr)}
   .memory-meta-grid{grid-template-columns:1fr}
   .template-grid{grid-template-columns:repeat(2,1fr)}
+  #screen-create #create-template-grid{grid-template-columns:repeat(3,1fr);gap:8px}
+  #screen-create .template-card{padding:10px 10px}
+  #screen-create .tmpl-emoji{font-size:22px}
+  #screen-create .tmpl-name{font-size:14px}
+  #screen-create .tmpl-desc{font-size:11.5px;-webkit-line-clamp:2}
   .form-card{padding:28px 24px}
   .cta-card{padding:36px 24px}
 }
 @media(max-width:600px){
   .template-grid{grid-template-columns:1fr 1fr}
+  #screen-create #create-template-grid{grid-template-columns:repeat(2,1fr)}
   .memory-grid{grid-template-columns:1fr 1fr}
   .type-picker{grid-template-columns:repeat(3,1fr)}
   .share-btns{grid-template-columns:1fr}
@@ -711,7 +733,7 @@ footer a{color:var(--gold);text-decoration:none}
      SCREEN: CREATE ARCHIVE
 ══════════════════════════════════════════════ -->
 <div id="screen-create" class="screen">
-  <div style="padding:40px 24px">
+  <div class="create-shell">
   <div class="form-card">
     <div class="breadcrumb">
       <a href="#" onclick="showScreen('landing');return false">Home</a>
@@ -737,10 +759,10 @@ footer a{color:var(--gold);text-decoration:none}
 
     <!-- Step 1: Template -->
     <div id="create-step1">
-      <h2 style="font-size:30px;font-weight:800;margin-bottom:8px">Choose a Template</h2>
-      <p style="color:var(--muted);margin-bottom:24px;font-size:20px">What kind of archive do you want to create?</p>
+      <h2 class="create-step-heading">Choose a Template</h2>
+      <p class="create-step-sub">What kind of archive do you want to create?</p>
       <div class="template-grid" id="create-template-grid"></div>
-      <div style="margin-top:24px;text-align:right">
+      <div class="create-step-footer">
         <button class="btn btn-gold" id="step1-next" onclick="goStep2()" disabled>Next: Add Details →</button>
       </div>
     </div>
