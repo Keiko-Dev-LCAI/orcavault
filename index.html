@@ -2014,10 +2014,138 @@ async function loadAndShowVault(vaultId) {
     hideLoading();
     updateRecoveryPanels();
     renderMemoriesGrid();
+    syncLocalThumbsToRelay();
   } catch(e) {
     hideLoading();
     document.getElementById('memories-content').innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Could not load archive</div><div class="empty-state-sub">${e.message || e}<br><br>Make sure the contract address is set correctly.</div></div>`;
   }
+}
+
+const OV_THUMB_GITHUB_BASE = 'https://raw.githubusercontent.com/Keiko-Dev-LCAI/orcavault/main/thumbs';
+
+function memoryThumbFilename(vaultId, idx) {
+  return `${vaultId}_${idx}.jpg`;
+}
+
+function relayMemoryThumbUrl(vaultId, idx) {
+  if (!RELAY_URL || vaultId == null || idx == null) return '';
+  return `${RELAY_URL}/api/orcavault/thumb/${vaultId}/${idx}`;
+}
+
+function githubMemoryThumbUrl(vaultId, idx) {
+  if (vaultId == null || idx == null) return '';
+  return `${OV_THUMB_GITHUB_BASE}/${memoryThumbFilename(vaultId, idx)}`;
+}
+
+function ovThumbImgHtml(vaultId, idx, title, primarySrc) {
+  const relay = relayMemoryThumbUrl(vaultId, idx);
+  const github = githubMemoryThumbUrl(vaultId, idx);
+  const src = primarySrc || relay || github;
+  const fallbacks = [relay, github].filter(u => u && u !== src);
+  const fbAttr = fallbacks.length ? ` data-fb="${escHtml(fallbacks.join('|'))}"` : '';
+  return `<img class="memory-thumb" src="${escHtml(src)}" alt="${escHtml(title || '')}" loading="lazy"${fbAttr} onerror="ovThumbImgError(this)">`;
+}
+
+function ovThumbImgError(img) {
+  const fb = (img.dataset.fb || '').split('|').filter(Boolean);
+  if (!fb.length) {
+    const ph = document.createElement('div');
+    ph.className = 'memory-thumb-placeholder';
+    ph.textContent = img.dataset.icon || '🎬';
+    img.replaceWith(ph);
+    return;
+  }
+  img.dataset.fb = fb.slice(1).join('|');
+  img.src = fb[0];
+}
+
+async function uploadMemoryThumbnail(vaultId, idx, dataUrl) {
+  if (!wallet || !RELAY_URL || !dataUrl) return false;
+  try {
+    const provider = new ethers.BrowserProvider(activeProvider || window.ethereum);
+    const signer = await provider.getSigner();
+    const timestamp = Date.now().toString();
+    const message = `Set thumbnail for Lightchain Archives memory vault=${vaultId} item=${idx}\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${timestamp}`;
+    const signature = await signer.signMessage(message);
+    const res = await fetch(`${RELAY_URL}/api/orcavault/set-thumbnail`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vaultId, itemIdx: idx, wallet: wallet.toLowerCase(), signature, timestamp, thumbnail: dataUrl })
+    });
+    const data = await res.json();
+    return res.ok && data.success;
+  } catch(e) {
+    console.warn('Thumbnail upload failed:', e);
+    return false;
+  }
+}
+
+function persistMemoryThumbnail(vaultId, idx, dataUrl) {
+  try { localStorage.setItem('ov_thumb_' + idx, dataUrl); } catch(e) {}
+  uploadMemoryThumbnail(vaultId, idx, dataUrl).then(ok => {
+    if (ok) showToast('Thumbnail saved for public browse ✅');
+  });
+}
+
+async function syncLocalThumbsToRelay() {
+  if (!wallet || !currentVaultId) return;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith('ov_thumb_')) continue;
+    const idx = Number(key.slice('ov_thumb_'.length));
+    const dataUrl = localStorage.getItem(key);
+    const mem = currentMemories.find(m => m.idx === idx);
+    if (!mem || !dataUrl) continue;
+    const creator = (mem.addedBy || '').toLowerCase();
+    if (creator && wallet.toLowerCase() !== creator) continue;
+    await uploadMemoryThumbnail(currentVaultId, idx, dataUrl);
+  }
+}
+
+function buildMemoryThumbHtml(m, opts = {}) {
+  const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄',website:'🔗'};
+  const icon = typeIcons[m.memType] || '📎';
+  const vaultId = m.vaultId != null ? m.vaultId : currentVaultId;
+  const idx = m.idx;
+  const isOwnerCard = opts.isOwnerCard === true;
+  const savedThumb = localStorage.getItem('ov_thumb_' + idx);
+
+  if (savedThumb) {
+    return ovThumbImgHtml(vaultId, idx, m.title, savedThumb);
+  }
+  const relay = relayMemoryThumbUrl(vaultId, idx);
+  const github = githubMemoryThumbUrl(vaultId, idx);
+  if (relay || github) {
+    return ovThumbImgHtml(vaultId, idx, m.title, relay || github);
+  }
+  if (m.memType === 'photo' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:image')) {
+    return ovThumbImgHtml(vaultId, idx, m.title, m.dataURI);
+  }
+  if (m.memType === 'photo' && m._isChunked) {
+    const isV3Card = m._source === 'v3relay' || m._contract === 'v3';
+    const cd = chunkCache.has((isV3Card ? 'v3-' : 'v2-') + m._memoryId) ? chunkCache.get((isV3Card ? 'v3-' : 'v2-') + m._memoryId) : null;
+    if (cd && (cd.startsWith('data:image') || cd.startsWith('http'))) {
+      return ovThumbImgHtml(vaultId, idx, m.title, cd);
+    }
+  }
+  if (m.memType === 'video' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:video')) {
+    return `<div class="memory-thumb-placeholder video-thumb-gen" data-video-idx="${idx}" data-icon="${icon}">${icon}</div>`;
+  }
+  if (m.memType === 'video' && m._isChunked) {
+    const ver = (m._contract === 'v3' || m._source === 'v3relay') ? 'v3' : 'v2';
+    const memId = m._memoryId;
+    const setBtn = isOwnerCard
+      ? `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">📷 Set thumbnail</button>`
+      : '';
+    if (memId != null && RELAY_URL) {
+      return `<div class="memory-thumb-placeholder browse-stream-thumb-gen" style="position:relative" data-stream-url="${escHtml(`${RELAY_URL}/api/media/stream/orcavault/${ver}/${memId}`)}" data-vault-id="${vaultId}" data-idx="${idx}" data-icon="${icon}">${icon}${setBtn}</div>`;
+    }
+  }
+  if (m.memType === 'video' && isOwnerCard) {
+    const setBtn = `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit">📷 Set thumbnail</button>`;
+    return `<div class="memory-thumb-placeholder" style="position:relative">${icon}${setBtn}</div>`;
+  }
+  return `<div class="memory-thumb-placeholder">${icon}</div>`;
 }
 
 function renderMemoriesGrid() {
@@ -2039,30 +2167,9 @@ function renderMemoriesGrid() {
     if (!isMemoryVisibleToViewer(m)) return; // non-owners don't see private memories
     const typeIcons = {photo:'📸',video:'🎬',audio:'🎵',text:'📝',document:'📄',website:'🔗'};
     const icon = typeIcons[m.memType] || '📎';
-    const savedThumb   = localStorage.getItem('ov_thumb_' + m.idx);
     const isOwnerCard  = wallet && currentVaultData && wallet.toLowerCase() === currentVaultData.owner.toLowerCase();
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
-    let cardThumb;
-    if (savedThumb) {
-      cardThumb = `<img class="memory-thumb" src="${savedThumb}" alt="${escHtml(m.title)}" loading="lazy">`;
-    } else if (m.memType === 'photo' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:image')) {
-      cardThumb = `<img class="memory-thumb" src="${escHtml(m.dataURI)}" alt="${escHtml(m.title)}" loading="lazy">`;
-    } else if (m.memType === 'photo' && m._isChunked) {
-      const isV3Card = m._source === 'v3relay' || m._contract === 'v3';
-      const cd = chunkCache.has((isV3Card ? 'v3-' : 'v2-') + m._memoryId) ? chunkCache.get((isV3Card ? 'v3-' : 'v2-') + m._memoryId) : null;
-      cardThumb = (cd && (cd.startsWith('data:image') || cd.startsWith('http')))
-        ? `<img class="memory-thumb" src="${escHtml(cd)}" alt="${escHtml(m.title)}" loading="lazy">`
-        : `<div class="memory-thumb-placeholder">${icon}</div>`;
-    } else if (m.memType === 'video' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:video')) {
-      cardThumb = `<div class="memory-thumb-placeholder video-thumb-gen" data-video-idx="${m.idx}">${icon}</div>`;
-    } else if (m.memType === 'video') {
-      const setBtn = isOwnerCard
-        ? `<button onclick="event.stopPropagation();setVideoThumbnail(${m.idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit">📷 Set thumbnail</button>`
-        : '';
-      cardThumb = `<div class="memory-thumb-placeholder" style="position:relative">${icon}${setBtn}</div>`;
-    } else {
-      cardThumb = `<div class="memory-thumb-placeholder">${icon}</div>`;
-    }
+    const cardThumb = buildMemoryThumbHtml(m, { isOwnerCard });
     const shareUrl = `${location.origin}${location.pathname}?vault=${currentVaultId}&item=${m.idx}`;
     const isPerm   = permRemovedMemories.has(String(m.idx));
     const isBanned = m.addedBy && bannedWallets.has(m.addedBy.toLowerCase());
@@ -2105,6 +2212,7 @@ function renderMemoriesGrid() {
   }
   el.innerHTML = html;
   generateVideoThumbnails();
+  generateStreamThumbnails('.browse-stream-thumb-gen');
 }
 
 function generateVideoThumbnails() {
@@ -2127,10 +2235,45 @@ function generateVideoThumbnails() {
         canvas.height = 180;
         canvas.getContext('2d').drawImage(video, 0, 0, 320, 180);
         var dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-        try { localStorage.setItem('ov_thumb_' + idx, dataUrl); } catch(e) {}
+        persistMemoryThumbnail(currentVaultId, idx, dataUrl);
         var img = document.createElement('img');
         img.className = 'memory-thumb';
         img.alt = m.title || 'Video';
+        img.src = dataUrl;
+        el.replaceWith(img);
+      } catch(e) {}
+      video.src = '';
+    });
+    video.addEventListener('error', function() {});
+    video.load();
+  });
+}
+
+function generateStreamThumbnails(selector) {
+  document.querySelectorAll(selector).forEach(function(el) {
+    const streamUrl = el.dataset.streamUrl;
+    const vaultId = Number(el.dataset.vaultId);
+    const idx = Number(el.dataset.idx);
+    if (!streamUrl) return;
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = 'anonymous';
+    video.src = streamUrl;
+    video.addEventListener('loadedmetadata', function() {
+      video.currentTime = Math.min(1, video.duration / 4);
+    });
+    video.addEventListener('seeked', function onSeeked() {
+      video.removeEventListener('seeked', onSeeked);
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = 180;
+        canvas.getContext('2d').drawImage(video, 0, 0, 320, 180);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        const img = document.createElement('img');
+        img.className = 'memory-thumb';
+        img.alt = 'Video';
         img.src = dataUrl;
         el.replaceWith(img);
       } catch(e) {}
@@ -2169,7 +2312,7 @@ function setVideoThumbnail(idx) {
         }
         ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 320, 180);
         var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        try { localStorage.setItem('ov_thumb_' + idx, dataUrl); } catch(e) {}
+        persistMemoryThumbnail(currentVaultId, idx, dataUrl);
         renderMemoriesGrid();
       };
       img.src = e.target.result;
@@ -3722,9 +3865,7 @@ function renderBrowseGrid(cat) {
   let html = '<div class="memory-grid">';
   pageItems.forEach(m => {
     const icon = typeIcons[m.memType] || '📎';
-    let thumbHtml = (m.memType === 'photo' && m.dataURI && m.dataURI.startsWith('data:image'))
-      ? `<img class="memory-thumb" src="${escHtml(m.dataURI)}" alt="${escHtml(m.title)}" loading="lazy">`
-      : `<div class="memory-thumb-placeholder">${icon}</div>`;
+    const thumbHtml = buildMemoryThumbHtml(m);
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
     const shareUrl = `${BASE_URL}?vault=${m.vaultId}&item=${m.idx}`;
     html += `<div class="memory-card" onclick="window.location.href='${escHtml(shareUrl)}'">
@@ -3751,6 +3892,7 @@ function renderBrowseGrid(cat) {
     </div>`;
   }
   contentEl.innerHTML = html;
+  generateStreamThumbnails('#browse-content .browse-stream-thumb-gen');
 }
 
 // ════════════════════════════════════════════════════════
