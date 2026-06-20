@@ -397,6 +397,7 @@ footer a{color:var(--gold);text-decoration:none}
   .nav-logo-icon{font-size:22px}
   .nav-spacer{display:none}
   #btn-my-archives{display:none !important}
+  #btn-browse{padding:9px 12px;flex-shrink:0}
   #btn-connect{padding:9px 14px;font-size:18px;white-space:nowrap;flex-shrink:0}
   #btn-connect .connect-label{display:none}
   #btn-disconnect{padding:9px 14px;font-size:14px;white-space:nowrap;flex-shrink:0}
@@ -512,8 +513,9 @@ footer a{color:var(--gold);text-decoration:none}
   /* Fix 3: Compact hero so bottom buttons reach the screen */
   .hero{padding:18px 18px 10px !important}
   .hero-eyebrow{display:none}
-  .hero-tagline{font-size:18px !important;margin-bottom:10px !important}
+  .hero-tagline{display:none !important}
   .hero-title{margin-bottom:8px !important}
+  .hero-ctas .btn{padding:10px 14px !important;font-size:16px !important}
   .section.section-alt{padding:12px 14px !important}
   /* Fix 3: Bottom buttons — side-by-side row */
   #landing-footer-bar{padding:8px 14px !important;display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px}
@@ -539,7 +541,7 @@ footer a{color:var(--gold);text-decoration:none}
   <a href="https://x.com/KeikoDevLCAI" target="_blank" rel="noopener" id="nav-x-link" style="font-size:16px;color:var(--purple);text-decoration:none;font-weight:700;white-space:nowrap;flex-shrink:0">𝕏 <span class="x-handle">@KeikoDevLCAI</span></a>
   <span id="nav-wallet-addr" class="nav-wallet-addr" style="display:none"></span>
   <button class="nav-btn nav-btn-outline" id="btn-my-archives" onclick="goMyArchives()" style="display:none">📂 My Archives</button>
-  <button class="nav-btn nav-btn-outline" onclick="showBrowseScreen()">🌐<span class="browse-label"> Browse</span></button>
+  <button class="nav-btn nav-btn-outline" id="btn-browse" onclick="showBrowseScreen()">🌐<span class="browse-label"> Browse</span></button>
   <button class="nav-btn nav-btn-primary" id="btn-connect" onclick="connectWallet()">🔗 <span class="connect-label">Connect Wallet</span></button>
   <button class="nav-btn nav-btn-outline" id="btn-disconnect" onclick="disconnectWallet()" style="display:none">Disconnect</button>
 </nav>
