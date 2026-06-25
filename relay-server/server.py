@@ -437,6 +437,30 @@ def _active_lt_job():
     return None
 
 
+_ACTIVE_SONG_JOB_STATUSES = frozenset({'queued', 'initializing', 'uploading'})
+
+
+def _active_song_job():
+    """Return an in-flight LightTunes upload job, if any."""
+    for job in lt_song_jobs.values():
+        if job.get('status') in _ACTIVE_SONG_JOB_STATUSES:
+            return job
+    return None
+
+
+def _relay_blockchain_busy():
+    """True when any LightTube or LightTunes job is using the relay wallet."""
+    return _active_lt_job() is not None or _active_song_job() is not None
+
+
+def _relay_busy_error():
+    return jsonify({
+        'error': 'Another upload is already running on the relay. '
+                 'Please wait a few minutes and try again.',
+        'busy': True,
+    }), 409
+
+
 def _cancel_all_lt_jobs(reason='Cancelled by admin'):
     """Force-clear all in-flight LightTube jobs from memory."""
     cancelled = 0
@@ -1342,6 +1366,10 @@ def lighttube_upload_init():
         except Exception as e:
             return jsonify({'error': f'Signature error: {e}'}), 401
 
+        # One relay-wallet upload at a time — prevents nonce collisions when multiple users upload
+        if _relay_blockchain_busy():
+            return _relay_busy_error()
+
     file_size = int(form.get('fileSize', data.get('fileSize', 0)) or 0)
     job_id    = str(uuid.uuid4())
 
@@ -1570,97 +1598,103 @@ def _process_chunked_upload(job_id):
         chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
 
         job['total']  = len(chunks)
-        job['status'] = 'initializing'
+        job['status'] = 'queued'
 
-        # ── initVideoFor ──────────────────────────────────────────────────────
-        user_wallet = job['wallet']
-        title       = job['title']
-        description = job['description']
-        category    = job['category']
+        # ── Blockchain phase — exclusive relay-wallet lock (one upload at a time) ──
+        with _relay_job_lock:
+            job['status'] = 'initializing'
 
-        with _nonce_lock:
-            nonce = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
-            tx = contract.functions.initVideoFor(
-                Web3.to_checksum_address(user_wallet), title, description, category, len(chunks)
-            ).build_transaction({
-                'from':     relay_acct.address,
-                'nonce':    nonce,
-                'gas':      300_000,
-                'gasPrice': w3_local.eth.gas_price,
-                'chainId':  CHAIN_ID,
-            })
-            signed  = w3_local.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
-            tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = w3_local.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+            # ── initVideoFor ──────────────────────────────────────────────────
+            user_wallet = job['wallet']
+            title       = job['title']
+            description = job['description']
+            category    = job['category']
+            init_gas    = _cap_gas_price(300_000, _lcai_gas_price())
 
-        # Parse videoId from VideoCreated event
-        ct_with_events = w3_local.eth.contract(
-            address=Web3.to_checksum_address(active_address),
-            abi=LIGHTTUBE_V2_ABI
-        )
-        logs     = ct_with_events.events.VideoCreated().process_receipt(receipt)
-        video_id = int(logs[0]['args']['videoId'])
-        job['videoId'] = video_id
-        job['status']  = 'uploading'
-        nonce += 1
+            with _nonce_lock:
+                nonce = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
+                tx = contract.functions.initVideoFor(
+                    Web3.to_checksum_address(user_wallet), title, description, category, len(chunks)
+                ).build_transaction({
+                    'from':     relay_acct.address,
+                    'nonce':    nonce,
+                    'gas':      300_000,
+                    'gasPrice': init_gas,
+                    'chainId':  CHAIN_ID,
+                })
+                signed  = w3_local.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
+                tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3_local.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
 
-        # Save thumbnail immediately after we have the videoId (non-fatal if it fails)
-        thumbnail_b64 = job.get('thumbnail')
-        if thumbnail_b64:
-            try:
-                prefix   = "v3" if LIGHTTUBE_V3_ADDRESS else "v2"
-                filename = f"{prefix}_{video_id}.jpg"
-                if GITHUB_TOKEN:
-                    save_thumbnail_github(filename, thumbnail_b64)
-                else:
-                    os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
-                    thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, filename)
-                    thumb_data = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
-                    with open(thumb_path, 'wb') as tf:
-                        tf.write(base64.b64decode(thumb_data))
-            except Exception as te:
-                print(f"Thumbnail save failed (non-fatal): {te}")
+            # Parse videoId from VideoCreated event
+            ct_with_events = w3_local.eth.contract(
+                address=Web3.to_checksum_address(active_address),
+                abi=LIGHTTUBE_V2_ABI
+            )
+            logs     = ct_with_events.events.VideoCreated().process_receipt(receipt)
+            video_id = int(logs[0]['args']['videoId'])
+            job['videoId'] = video_id
+            job['status']  = 'uploading'
+            nonce += 1
 
-        # ── addVideoChunkFor × N (adaptive parallel batches) — identical to _do_lt_upload ──
-        _MAX_BATCH = 25
-        _MIN_BATCH = 8
-        batch_size = max(CHUNK_BATCH_SIZE, 15)
-        chunk_idx  = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
-            while chunk_idx < len(chunks):
-                batch          = chunks[chunk_idx : chunk_idx + batch_size]
-                gas_price      = int(w3_local.eth.gas_price * 1.2)
-                future_map     = {}
-                had_real_error = False
+            # Save thumbnail immediately after we have the videoId (non-fatal if it fails)
+            thumbnail_b64 = job.get('thumbnail')
+            if thumbnail_b64:
+                try:
+                    prefix   = "v3" if LIGHTTUBE_V3_ADDRESS else "v2"
+                    filename = f"{prefix}_{video_id}.jpg"
+                    if GITHUB_TOKEN:
+                        save_thumbnail_github(filename, thumbnail_b64)
+                    else:
+                        os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
+                        thumb_path = os.path.join(LIGHTTUBE_THUMBS_DIR, filename)
+                        thumb_data = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
+                        with open(thumb_path, 'wb') as tf:
+                            tf.write(base64.b64decode(thumb_data))
+                except Exception as te:
+                    print(f"Thumbnail save failed (non-fatal): {te}")
 
-                for j, chunk in enumerate(batch):
-                    ci = chunk_idx + j
-                    cn = nonce + j
-                    f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunk, cn, gas_price, active_address)
-                    future_map[f] = (ci, cn, chunk)
+            # ── addVideoChunkFor × N (adaptive parallel batches) ────────────
+            _MAX_BATCH = 25
+            _MIN_BATCH = 8
+            batch_size = max(CHUNK_BATCH_SIZE, 15)
+            chunk_idx  = 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
+                while chunk_idx < len(chunks):
+                    batch          = chunks[chunk_idx : chunk_idx + batch_size]
+                    gas_price      = _lcai_gas_price()
+                    future_map     = {}
+                    had_real_error = False
 
-                for f in concurrent.futures.as_completed(future_map):
-                    ci, cn, chunk = future_map[f]
-                    try:
-                        f.result()
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        if 'nonce too low' in err_str or 'already known' in err_str:
-                            print(f"[WARNING] chunk {ci} got 'nonce too low' — may have been dropped by concurrent job. Marking as done.")
-                        else:
-                            had_real_error = True
-                            _send_one_chunk_tx(video_id, ci, chunk, cn, int(w3_local.eth.gas_price * 1.2), active_address)
-                    job['progress'] += 1
+                    for j, chunk in enumerate(batch):
+                        ci = chunk_idx + j
+                        cn = nonce + j
+                        f  = pool.submit(_send_one_chunk_tx, video_id, ci, chunk, cn, gas_price, active_address)
+                        future_map[f] = (ci, cn, chunk)
 
-                nonce     += len(batch)
-                chunk_idx += len(batch)
+                    for f in concurrent.futures.as_completed(future_map):
+                        ci, cn, chunk = future_map[f]
+                        try:
+                            f.result()
+                        except Exception as e:
+                            err_str = str(e).lower()
+                            if 'nonce too low' in err_str or 'already known' in err_str:
+                                print(f"[WARNING] chunk {ci} got 'nonce too low' — retrying once.")
+                                _send_one_chunk_tx(video_id, ci, chunk, cn, _lcai_gas_price(), active_address)
+                            else:
+                                had_real_error = True
+                                _send_one_chunk_tx(video_id, ci, chunk, cn, _lcai_gas_price(), active_address)
+                        job['progress'] += 1
 
-                if had_real_error:
-                    batch_size = max(batch_size - 5, _MIN_BATCH)
-                    print(f"[chunked-upload] batch error — backing off to {batch_size} chunks/batch")
-                else:
-                    batch_size = min(batch_size + 3, _MAX_BATCH)
-                    print(f"[chunked-upload] clean batch — stepping up to {batch_size} chunks/batch")
+                    nonce     += len(batch)
+                    chunk_idx += len(batch)
+
+                    if had_real_error:
+                        batch_size = max(batch_size - 5, _MIN_BATCH)
+                        print(f"[chunked-upload] batch error — backing off to {batch_size} chunks/batch")
+                    else:
+                        batch_size = min(batch_size + 3, _MAX_BATCH)
+                        print(f"[chunked-upload] clean batch — stepping up to {batch_size} chunks/batch")
 
         job['status'] = 'complete'
         try:
@@ -3315,7 +3349,7 @@ def _send_one_lt_chunk_tx(song_id, chunk_index, chunk_data, nonce, gas_price, co
     finally:
         _return_w3(w3t)
 
-def _do_lt_upload(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64=None):
+def _do_lighttunes_upload(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64=None):
     """Background thread: chunk and store a song via LightTunes relay."""
     job = lt_song_jobs[job_id]
     try:
@@ -3327,89 +3361,88 @@ def _do_lt_upload(job_id, user_wallet, title, artist, genre, description, is_pub
         chunks = [data_uri[i:i+CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
         job['total'] = len(chunks)
 
-        # ── initSongFor ───────────────────────────────────────────────────────
-        job['status'] = 'initializing'
-        nonce = w3.eth.get_transaction_count(relay_acct.address, 'pending')
-        gas_price = int(w3.eth.gas_price * 1.2)
-        tx = contract.functions.initSongFor(
-            Web3.to_checksum_address(user_wallet), title, artist, genre, description, is_public, len(chunks)
-        ).build_transaction({'from': relay_acct.address, 'nonce': nonce, 'gas': 500_000,
-                              'gasPrice': gas_price, 'chainId': CHAIN_ID})
-        signed  = relay_acct.sign_transaction(tx)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-        song_id_raw = contract.events.SongCreated().process_receipt(receipt)
-        song_id = int(song_id_raw[0]['args']['songId']) if song_id_raw else None
-        if song_id is None:
-            raise Exception("Could not determine songId from initSongFor receipt")
-        job['songId'] = song_id
-        nonce += 1
+        with _relay_job_lock:
+            # ── initSongFor ───────────────────────────────────────────────────
+            job['status'] = 'initializing'
+            nonce = w3.eth.get_transaction_count(relay_acct.address, 'pending')
+            init_gas = _cap_gas_price(500_000, _lcai_gas_price())
+            tx = contract.functions.initSongFor(
+                Web3.to_checksum_address(user_wallet), title, artist, genre, description, is_public, len(chunks)
+            ).build_transaction({'from': relay_acct.address, 'nonce': nonce, 'gas': 500_000,
+                                  'gasPrice': init_gas, 'chainId': CHAIN_ID})
+            signed  = relay_acct.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            song_id_raw = contract.events.SongCreated().process_receipt(receipt)
+            song_id = int(song_id_raw[0]['args']['songId']) if song_id_raw else None
+            if song_id is None:
+                raise Exception("Could not determine songId from initSongFor receipt")
+            job['songId'] = song_id
+            nonce += 1
 
-        # ── Save thumbnail to GitHub (LightTunes repo) ───────────────────────
-        if thumbnail_b64:
-            try:
-                import base64 as _b64
-                b64_content = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
-                path    = f"thumbs/v1_{song_id}.jpg"
-                api_url = f"https://api.github.com/repos/{LIGHTTUNES_GITHUB_REPO}/contents/{path}"
-                headers = {
-                    "Authorization": f"token {GITHUB_TOKEN}",
-                    "Accept":        "application/vnd.github.v3+json",
-                    "Content-Type":  "application/json",
-                }
-                # get existing SHA for update
-                sha = None
+            # ── Save thumbnail to GitHub (LightTunes repo) ───────────────────
+            if thumbnail_b64:
                 try:
-                    req = urllib.request.Request(api_url, headers=headers)
-                    with urllib.request.urlopen(req, timeout=10) as r:
-                        sha = json.loads(r.read()).get("sha")
-                except Exception:
-                    pass
-                body = {"message": f"LightTunes thumbnail song {song_id}", "content": b64_content, "branch": LIGHTTUNES_GITHUB_BRANCH}
-                if sha:
-                    body["sha"] = sha
-                req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
-                with urllib.request.urlopen(req, timeout=20) as r:
-                    r.read()
-                print(f"LightTunes thumbnail saved: {path}")
-            except Exception as te:
-                print(f"LightTunes thumbnail save failed: {te}")
-
-        # ── addSongChunkFor × N ───────────────────────────────────────────────
-        _MAX_BATCH = 25
-        _MIN_BATCH = 8
-        job['status'] = 'uploading'
-        batch_size = max(CHUNK_BATCH_SIZE, 15)
-        chunk_idx  = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
-            while chunk_idx < len(chunks):
-                batch      = chunks[chunk_idx : chunk_idx + batch_size]
-                gas_price  = int(w3.eth.gas_price * 1.2)
-                future_map = {}
-                had_real_error = False
-                for j, chunk in enumerate(batch):
-                    ci = chunk_idx + j
-                    cn = nonce + j
-                    f  = pool.submit(_send_one_lt_chunk_tx, song_id, ci, chunk, cn, gas_price, LIGHTTUNES_V1_ADDRESS)
-                    future_map[f] = (ci, cn, chunk)
-                for f in concurrent.futures.as_completed(future_map):
-                    ci, cn, chunk = future_map[f]
+                    b64_content = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
+                    path    = f"thumbs/v1_{song_id}.jpg"
+                    api_url = f"https://api.github.com/repos/{LIGHTTUNES_GITHUB_REPO}/contents/{path}"
+                    headers = {
+                        "Authorization": f"token {GITHUB_TOKEN}",
+                        "Accept":        "application/vnd.github.v3+json",
+                        "Content-Type":  "application/json",
+                    }
+                    sha = None
                     try:
-                        f.result()
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        if 'nonce too low' in err_str or 'already known' in err_str:
-                            pass
-                        else:
-                            had_real_error = True
-                            _send_one_lt_chunk_tx(song_id, ci, chunk, cn, int(w3.eth.gas_price * 1.2), LIGHTTUNES_V1_ADDRESS)
-                    job['progress'] += 1
-                nonce     += len(batch)
-                chunk_idx += len(batch)
-                if had_real_error:
-                    batch_size = max(batch_size - 5, _MIN_BATCH)
-                else:
-                    batch_size = min(batch_size + 3, _MAX_BATCH)
+                        req = urllib.request.Request(api_url, headers=headers)
+                        with urllib.request.urlopen(req, timeout=10) as r:
+                            sha = json.loads(r.read()).get("sha")
+                    except Exception:
+                        pass
+                    body = {"message": f"LightTunes thumbnail song {song_id}", "content": b64_content, "branch": LIGHTTUNES_GITHUB_BRANCH}
+                    if sha:
+                        body["sha"] = sha
+                    req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
+                    with urllib.request.urlopen(req, timeout=20) as r:
+                        r.read()
+                    print(f"LightTunes thumbnail saved: {path}")
+                except Exception as te:
+                    print(f"LightTunes thumbnail save failed: {te}")
+
+            # ── addSongChunkFor × N ───────────────────────────────────────────
+            _MAX_BATCH = 25
+            _MIN_BATCH = 8
+            job['status'] = 'uploading'
+            batch_size = max(CHUNK_BATCH_SIZE, 15)
+            chunk_idx  = 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
+                while chunk_idx < len(chunks):
+                    batch      = chunks[chunk_idx : chunk_idx + batch_size]
+                    gas_price  = _lcai_gas_price()
+                    future_map = {}
+                    had_real_error = False
+                    for j, chunk in enumerate(batch):
+                        ci = chunk_idx + j
+                        cn = nonce + j
+                        f  = pool.submit(_send_one_lt_chunk_tx, song_id, ci, chunk, cn, gas_price, LIGHTTUNES_V1_ADDRESS)
+                        future_map[f] = (ci, cn, chunk)
+                    for f in concurrent.futures.as_completed(future_map):
+                        ci, cn, chunk = future_map[f]
+                        try:
+                            f.result()
+                        except Exception as e:
+                            err_str = str(e).lower()
+                            if 'nonce too low' in err_str or 'already known' in err_str:
+                                _send_one_lt_chunk_tx(song_id, ci, chunk, cn, _lcai_gas_price(), LIGHTTUNES_V1_ADDRESS)
+                            else:
+                                had_real_error = True
+                                _send_one_lt_chunk_tx(song_id, ci, chunk, cn, _lcai_gas_price(), LIGHTTUNES_V1_ADDRESS)
+                        job['progress'] += 1
+                    nonce     += len(batch)
+                    chunk_idx += len(batch)
+                    if had_real_error:
+                        batch_size = max(batch_size - 5, _MIN_BATCH)
+                    else:
+                        batch_size = min(batch_size + 3, _MAX_BATCH)
 
         job['status'] = 'complete'
         print(f"LightTunes upload complete [{job_id}]: songId={song_id}, chunks={len(chunks)}")
@@ -3439,6 +3472,8 @@ def lighttunes_upload():
         return jsonify({'error': 'Relay not configured'}), 500
     if LIGHTTUBE_MAINTENANCE:
         return jsonify({'error': 'LightTunes is in maintenance mode'}), 503
+    if _relay_blockchain_busy():
+        return _relay_busy_error()
 
     user_wallet   = request.form.get('wallet', '').strip()
     signature     = request.form.get('signature', '').strip()
@@ -3510,9 +3545,12 @@ def lighttunes_upload():
     mime_type   = audio_file.content_type or 'audio/mpeg'
     data_uri    = f"data:{mime_type};base64," + _b64.b64encode(audio_bytes).decode()
 
+    if _relay_blockchain_busy():
+        return _relay_busy_error()
+
     job_id = str(uuid.uuid4())[:8]
     lt_song_jobs[job_id] = {'status': 'queued', 'progress': 0, 'total': 0, 'songId': None, 'error': None}
-    threading.Thread(target=_do_lt_upload, daemon=True,
+    threading.Thread(target=_do_lighttunes_upload, daemon=True,
         args=(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64)).start()
     return jsonify({'jobId': job_id})
 
