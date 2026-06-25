@@ -649,6 +649,32 @@ def _lighttube_contract_for_version(version):
     return addr if addr else None
 
 
+_LT_VIDEOS_ABI = [{"inputs":[{"name":"","type":"uint256"}],"name":"videos","outputs":[
+    {"name":"uploader","type":"address"},{"name":"totalChunks","type":"uint256"},{"name":"exists","type":"bool"}
+],"stateMutability":"view","type":"function"}]
+
+
+def _verify_lt_video_uploader(video_id, wallet, contract_version='v3'):
+    """Return (ok, error_message). wallet must be lowercase checksummed compare."""
+    contract_ver = (contract_version or 'v3').strip().lower()
+    if contract_ver not in ('v2', 'v3'):
+        return False, 'contractVersion must be v2 or v3'
+    addr = _lighttube_contract_for_version(contract_ver)
+    if not addr:
+        return False, f'Contract {contract_ver} not configured'
+    try:
+        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+        ct  = w3_local.eth.contract(address=Web3.to_checksum_address(addr), abi=_LT_VIDEOS_ABI)
+        vid = ct.functions.videos(int(video_id)).call()
+        if not vid[2]:
+            return False, 'Video not found on chain'
+        if vid[0].lower() != wallet.lower():
+            return False, 'Not the video uploader — only the owner can repair this video'
+        return True, None
+    except Exception as e:
+        return False, f'Chain verification failed: {e}'
+
+
 def _stream_cache_key(version, video_id):
     return f"lighttube-{version}-{video_id}"
 
@@ -1330,13 +1356,37 @@ def lighttube_upload_init():
     repair_video_id_str = _field('repairVideoId')
     repair_video_id = int(repair_video_id_str) if repair_video_id_str else None
 
+    contract_version = (_field('contractVersion', 'v3') or 'v3').lower()
+
     if repair_video_id is not None:
-        # Repair mode — admin-only; skip wallet/title/sig checks
-        if not LIGHTTUBE_ADMIN_KEY:
-            return jsonify({'error': 'Admin not configured on server'}), 500
+        # Repair mode — admin OR on-chain uploader (wallet signature)
         admin_key = _field('adminKey')
-        if admin_key != LIGHTTUBE_ADMIN_KEY:
-            return jsonify({'error': 'Unauthorized'}), 401
+        is_admin_repair = (
+            LIGHTTUBE_ADMIN_KEY
+            and admin_key
+            and admin_key == LIGHTTUBE_ADMIN_KEY
+        )
+        if is_admin_repair:
+            pass  # admin path — no wallet sig required
+        else:
+            if not wallet or not signature or not timestamp:
+                return jsonify({'error': 'Connect wallet and sign to repair your video'}), 401
+            if wallet in BANNED_WALLETS or wallet in get_banned_wallets_gh():
+                return jsonify({'error': 'This wallet has been banned from LightTube.'}), 403
+            message = (
+                f"Repair LightTube video\nVideo ID: {repair_video_id}\n"
+                f"Wallet: {wallet}\nTimestamp: {timestamp}"
+            )
+            try:
+                msg       = encode_defunct(text=message)
+                recovered = Account.recover_message(msg, signature=signature).lower()
+                if recovered != wallet:
+                    return jsonify({'error': 'Signature does not match wallet'}), 401
+            except Exception as e:
+                return jsonify({'error': f'Signature error: {e}'}), 401
+            ok, err = _verify_lt_video_uploader(repair_video_id, wallet, contract_version)
+            if not ok:
+                return jsonify({'error': err}), 403
         if not total_pieces:
             return jsonify({'error': 'totalPieces required'}), 400
         _prune_stale_lt_jobs()
@@ -1393,6 +1443,7 @@ def lighttube_upload_init():
                 'file_name':       file_name,
                 'thumbnail':       thumbnail,
                 'repair_video_id': repair_video_id,
+                'contract_version': contract_version,
                 'from_cache':      True,
                 'started_at':      time.time(),
             }
@@ -1421,6 +1472,7 @@ def lighttube_upload_init():
         'file_name':       file_name,
         'thumbnail':       thumbnail,
         'repair_video_id': repair_video_id,
+        'contract_version': contract_version,
         'file_size':       file_size,
         'started_at':      time.time(),
     }
@@ -1493,7 +1545,11 @@ def _process_chunked_upload(job_id):
     job      = lt_upload_jobs[job_id]
     tmp_path = job['tmp_path']
     try:
-        active_address = LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS
+        repair_video_id = job.get('repair_video_id')
+        if repair_video_id is not None:
+            active_address = _lighttube_contract_for_version(job.get('contract_version', 'v3'))
+        else:
+            active_address = LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS
         if not active_address:
             raise Exception("No LightTube contract address configured (set LIGHTTUBE_V3_ADDRESS or LIGHTTUBE_V2_ADDRESS)")
 
@@ -1503,8 +1559,6 @@ def _process_chunked_upload(job_id):
             address=Web3.to_checksum_address(active_address),
             abi=LIGHTTUBE_V2_ABI  # relay ABI is identical for V2 and V3
         )
-
-        repair_video_id = job.get('repair_video_id')
 
         # ── REPAIR MODE: scan blockchain BEFORE loading 2 GB into RAM ────────
         if repair_video_id is not None:
