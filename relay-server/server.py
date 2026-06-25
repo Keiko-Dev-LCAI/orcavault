@@ -3218,6 +3218,8 @@ LIGHTTUNES_THUMBS_DIR    = os.environ.get("LIGHTTUNES_THUMBS_DIR", "/data/lt_thu
 LIGHTTUNES_FEE_USD       = float(os.environ.get("LIGHTTUNES_FEE_USD", "0.50"))
 LIGHTTUNES_FEE_WALLET    = os.environ.get("LIGHTTUNES_FEE_WALLET", "").strip().lower()
 LIGHTTUNES_USED_TX_FILE  = os.environ.get("LIGHTTUNES_USED_TX_FILE", "/data/lighttunes_used_tx.json")
+LIGHTTUNES_VIEWS_FILE    = os.environ.get("LIGHTTUNES_VIEWS_FILE", "/data/lighttunes_views.json")
+_lt_views_lock           = threading.Lock()
 
 # ─── LCAI price feed (cached 5 min) ─────────────────────────────────────────
 _lt_price_cache = {'price': None, 'ts': 0}
@@ -3386,6 +3388,37 @@ def save_lt_overrides(overrides):
             json.dump(overrides, f, indent=2)
     except Exception as e:
         print(f"Warning: could not save lt_overrides: {e}")
+
+def _lt_view_key(song_id):
+    key = str(song_id).replace('v1-', '').strip()
+    return key if key.isdigit() else None
+
+def load_lt_views():
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUNES_VIEWS_FILE), exist_ok=True)
+        with open(LIGHTTUNES_VIEWS_FILE, 'r') as f:
+            raw = json.load(f)
+            return {str(k): int(v) for k, v in raw.items()}
+    except Exception:
+        return {}
+
+def save_lt_views(views):
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUNES_VIEWS_FILE), exist_ok=True)
+        with open(LIGHTTUNES_VIEWS_FILE, 'w') as f:
+            json.dump(views, f)
+    except Exception as e:
+        print(f"Warning: could not save lt_views: {e}")
+
+def increment_lt_view(song_id):
+    key = _lt_view_key(song_id)
+    if not key:
+        return None
+    with _lt_views_lock:
+        views = load_lt_views()
+        views[key] = views.get(key, 0) + 1
+        save_lt_views(views)
+        return views[key]
 
 # ─── LightTunes chunk upload helpers ──────────────────────────────────────────
 def _send_one_lt_chunk_tx(song_id, chunk_index, chunk_data, nonce, gas_price, contract_address):
@@ -3614,6 +3647,23 @@ def lighttunes_upload_progress(job_id):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     return jsonify(job)
+
+@app.route('/api/lighttunes/views', methods=['GET'])
+def lighttunes_get_views():
+    """Public play counts per song (finished listens on public tracks)."""
+    return jsonify({'views': load_lt_views()})
+
+@app.route('/api/lighttunes/view', methods=['POST'])
+def lighttunes_record_view():
+    """Increment view count when a public song is played to completion."""
+    body = request.get_json(silent=True) or {}
+    song_id = body.get('songId')
+    if song_id is None:
+        return jsonify({'error': 'songId required'}), 400
+    count = increment_lt_view(song_id)
+    if count is None:
+        return jsonify({'error': 'invalid songId'}), 400
+    return jsonify({'success': True, 'songId': int(_lt_view_key(song_id)), 'views': count})
 
 @app.route('/api/lighttunes/hidden', methods=['GET'])
 def lighttunes_get_hidden():
