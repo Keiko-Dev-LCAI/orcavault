@@ -1,65 +1,66 @@
-# OrcaVault Relay — Morning Deploy Checklist
+# OrcaVault Relay — Deploy Checklist
 
-When you're ready, do these steps in order.
+**Security:** Never commit `RELAY_PRIVATE_KEY` to git, briefings, or GitHub. Store only in Railway env vars (or local `.env` excluded by `.gitignore`).
 
 ---
 
-## RELAY WALLET (already generated — save this!)
+## Relay wallet
 
-Address:    0xC19dc1E0d9d63E6E204207c9eFb53ec1F302015f
-Private key: stored only in Railway env var (see Step 3)
+| Item | Value |
+|------|-------|
+| **Current relay (2026-07-01)** | `0xbb0ab4c9E15a20661CA0C4d2b6f5D32A7EdF7646` |
+| **Old relay (compromised — abandoned)** | `0xC19dc1E0d9d63E6E204207c9eFb53ec1F302015f` |
+| **Private key** | Railway env var `RELAY_PRIVATE_KEY` only — generate offline, never paste into repos |
 
-**Send 10 LCAI to that address for gas.** This covers thousands of uploads.
+Fund the relay with **500+ LCAI** for gas before heavy upload use.
+
+After rotating the relay wallet, call `setRelayWallet()` on all on-chain contracts — see `SET-RELAY-WALLET.md`.
 
 ---
 
 ## Step 1 — Deploy V3 Contract in Remix
 
-1. Open https://remix.ethereum.org in Chrome (VPN ON, MetaMask connected to Lightchain)
-2. Create new file: OrcaVaultV3.sol
-3. Paste the full code from ~/Desktop/orcavault-app/OrcaVaultV3.sol
-4. Compile: Solidity Compiler → 0.8.20 → Compile
-5. Deploy: Deploy tab → Environment: Injected Provider → Contract: OrcaVaultV3
-6. Constructor arg (_relayWallet): 0xC19dc1E0d9d63E6E204207c9eFb53ec1F302015f
-7. Click Deploy → confirm in MetaMask
-8. Copy the deployed contract address → paste into index.html as V3_CONTRACT_ADDRESS
+1. Open https://remix.ethereum.org (MetaMask on Lightchain mainnet, chain ID 9200)
+2. Paste `OrcaVaultV3.sol` from `~/Desktop/orcavault-app/`
+3. Compile Solidity 0.8.20
+4. Deploy → Injected Provider → constructor `_relayWallet`: current relay address above
+5. Copy deployed address → `V3_CONTRACT_ADDRESS` in `index.html` and Railway
 
 ---
 
 ## Step 2 — Deploy Relay Server to Railway
 
-1. Go to railway.app → New Project → Deploy from GitHub repo
-   OR: New Project → Empty Project → upload the relay-server/ folder
-2. Set environment variables:
-   - RELAY_PRIVATE_KEY = [REDACTED-use-Railway-RELAY_PRIVATE_KEY-only]
-   - V3_CONTRACT_ADDRESS = (address from Step 1)
-   - OWNER_WALLET = 0xA3a653 (your full Trust Wallet address — gets free relay forever)
-   - RELAY_FEE_LCAI = 2.0
-3. Add a Railway Volume mounted at /data (for storing paid wallets list persistently)
-4. Railway will auto-detect Python and deploy
-5. Copy the Railway URL (e.g. web-production-XXXXX.up.railway.app)
+Project: **vivacious-empathy** → orcavault service
+
+**Environment variables (no secrets in git):**
+
+| Variable | Example / note |
+|----------|----------------|
+| `RELAY_PRIVATE_KEY` | `0x…` — paste in Railway UI only |
+| `V3_CONTRACT_ADDRESS` | Deployed OrcaVault V3 address |
+| `LIGHTTUBE_V2_ADDRESS` | `0xf8cdC4f6241D655bB4E30fF5f1433Fb9F358aDB5` |
+| `LIGHTTUBE_V3_ADDRESS` | `0x2077AbeBe64461f0265937328C9e710C35E18Fd3` |
+| `LIGHTTUNES_V1_ADDRESS` | `0x3587067a1E37A1c05095B3cc053564Db49a27F7D` |
+| `LIGHTTUNES_FEE_WALLET` | MetaMask fee collector — not relay wallet |
+| `OWNER_WALLET` | Owner wallet (free relay access) |
+| `RELAY_FEE_LCAI` | `2.0` |
+
+Mount Railway Volume at `/data` for persistent paid-wallet registry.
 
 ---
 
-## Step 3 — Update index.html
+## Step 3 — Register relay on contracts
 
-Claude will update these constants once you have the addresses:
-- V3_CONTRACT_ADDRESS = deployed address from Step 1
-- RELAY_URL = Railway URL from Step 2
+**Required after any relay wallet rotation.** Owner wallet (MetaMask) must call `setRelayWallet(newRelay)` on:
 
-Then Claude adds the "Auto-Upload" button that signs once and sends the rest automatically.
+- LightTunes V1
+- LightTube V2 + V3
+- OrcaVault V3
+
+Full steps: `SET-RELAY-WALLET.md`
 
 ---
 
-## What you get after this is done
+## Incident note (2026-06-27)
 
-**You (owner wallet):**
-- Tap "Auto Upload" → sign once → done. Free forever.
-
-**Users who pay 2 LCAI:**
-- Send 2 LCAI to relay wallet → click "Unlock One-Click" → verified on-chain → one-click forever
-
-**Everyone else:**
-- Normal upload with a few wallet taps (no relay, no cost to you)
-
-Relay wallet auto-refills itself from user payments over time.
+Old relay key was exposed in a prior commit of this file on public GitHub (`Keiko-Dev-LCAI/orcavault`). Root cause: **plaintext key in git**, not Railway-only. Key scrubbed from history 2026-07-01. Old wallet abandoned; use new relay only.
