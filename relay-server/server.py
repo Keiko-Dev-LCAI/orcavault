@@ -3436,7 +3436,53 @@ def _send_one_lt_chunk_tx(song_id, chunk_index, chunk_data, nonce, gas_price, co
     finally:
         _return_w3(w3t)
 
-def _do_lighttunes_upload(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64=None):
+def _lt_album_slug(album_name):
+    s = (album_name or '').lower()
+    out, prev_dash = [], False
+    for ch in s:
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append('-')
+            prev_dash = True
+    slug = ''.join(out).strip('-')
+    return slug[:40] if slug else 'album'
+
+
+def _lt_album_thumb_filename(wallet, album_name):
+    w = wallet.lower().replace('0x', '')
+    return f"album_{w}_{_lt_album_slug(album_name)}.jpg"
+
+
+def _save_lighttunes_github_thumb(relative_path, data_b64):
+    """Commit a JPEG to the LightTunes GitHub repo under thumbs/."""
+    if not GITHUB_TOKEN:
+        raise Exception("GITHUB_TOKEN not configured")
+    b64_content = data_b64.split(',', 1)[1] if ',' in data_b64 else data_b64
+    path = f"thumbs/{relative_path}"
+    api_url = f"https://api.github.com/repos/{LIGHTTUNES_GITHUB_REPO}/contents/{path}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept":        "application/vnd.github.v3+json",
+        "Content-Type":  "application/json",
+    }
+    sha = None
+    try:
+        req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            sha = json.loads(r.read()).get("sha")
+    except Exception:
+        pass
+    body = {"message": f"LightTunes thumb {relative_path}", "content": b64_content, "branch": LIGHTTUNES_GITHUB_BRANCH}
+    if sha:
+        body["sha"] = sha
+    req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        r.read()
+
+
+def _do_lighttunes_upload(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64=None, album_cover_b64=None, album_name=None):
     """Background thread: chunk and store a song via LightTunes relay."""
     job = lt_song_jobs[job_id]
     try:
@@ -3467,33 +3513,22 @@ def _do_lighttunes_upload(job_id, user_wallet, title, artist, genre, description
             job['songId'] = song_id
             nonce += 1
 
-            # ── Save thumbnail to GitHub (LightTunes repo) ───────────────────
+            # ── Save song thumbnail to GitHub (LightTunes repo) ──────────────
             if thumbnail_b64:
                 try:
-                    b64_content = thumbnail_b64.split(',', 1)[1] if ',' in thumbnail_b64 else thumbnail_b64
-                    path    = f"thumbs/v1_{song_id}.jpg"
-                    api_url = f"https://api.github.com/repos/{LIGHTTUNES_GITHUB_REPO}/contents/{path}"
-                    headers = {
-                        "Authorization": f"token {GITHUB_TOKEN}",
-                        "Accept":        "application/vnd.github.v3+json",
-                        "Content-Type":  "application/json",
-                    }
-                    sha = None
-                    try:
-                        req = urllib.request.Request(api_url, headers=headers)
-                        with urllib.request.urlopen(req, timeout=10) as r:
-                            sha = json.loads(r.read()).get("sha")
-                    except Exception:
-                        pass
-                    body = {"message": f"LightTunes thumbnail song {song_id}", "content": b64_content, "branch": LIGHTTUNES_GITHUB_BRANCH}
-                    if sha:
-                        body["sha"] = sha
-                    req = urllib.request.Request(api_url, data=json.dumps(body).encode(), headers=headers, method="PUT")
-                    with urllib.request.urlopen(req, timeout=20) as r:
-                        r.read()
-                    print(f"LightTunes thumbnail saved: {path}")
+                    _save_lighttunes_github_thumb(f"v1_{song_id}.jpg", thumbnail_b64)
+                    print(f"LightTunes thumbnail saved: v1_{song_id}.jpg")
                 except Exception as te:
                     print(f"LightTunes thumbnail save failed: {te}")
+
+            # ── Save album cover (same release name) ─────────────────────────
+            if album_cover_b64 and album_name:
+                try:
+                    afn = _lt_album_thumb_filename(user_wallet, album_name)
+                    _save_lighttunes_github_thumb(afn, album_cover_b64)
+                    print(f"LightTunes album cover saved: {afn}")
+                except Exception as ae:
+                    print(f"LightTunes album cover save failed: {ae}")
 
             # ── addSongChunkFor × N ───────────────────────────────────────────
             _MAX_BATCH = 25
@@ -3570,6 +3605,8 @@ def lighttunes_upload():
     description   = request.form.get('description', '').strip()
     is_public     = request.form.get('isPublic', 'true').lower() in ('true', '1', 'yes')
     thumbnail_b64 = request.form.get('thumbnail', '')
+    album_cover_b64 = request.form.get('albumCover', '')
+    album_name_form = request.form.get('albumName', '').strip()
     payment_tx    = request.form.get('paymentTxHash', '').strip()
 
     if not user_wallet:
@@ -3638,8 +3675,44 @@ def lighttunes_upload():
     job_id = str(uuid.uuid4())[:8]
     lt_song_jobs[job_id] = {'status': 'queued', 'progress': 0, 'total': 0, 'songId': None, 'error': None}
     threading.Thread(target=_do_lighttunes_upload, daemon=True,
-        args=(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64)).start()
+        args=(job_id, user_wallet, title, artist, genre, description, is_public, data_uri, thumbnail_b64, album_cover_b64, album_name_form)).start()
     return jsonify({'jobId': job_id})
+
+
+@app.route('/api/lighttunes/set-album-cover', methods=['POST'])
+def lighttunes_set_album_cover():
+    """Uploader sets or updates cover art for an album collection."""
+    data      = request.get_json(force=True) or {}
+    wallet    = (data.get('wallet', '') or '').strip().lower()
+    album     = (data.get('album', '') or '').strip()
+    signature = (data.get('signature', '') or '').strip()
+    timestamp = str(data.get('timestamp', '') or '').strip()
+    thumbnail = (data.get('thumbnail', '') or '').strip()
+
+    if not all([wallet, album, signature, thumbnail]):
+        return jsonify({'error': 'Missing required fields'}), 400
+    if len(album) > 80:
+        return jsonify({'error': 'Album name too long'}), 400
+
+    message = f"LightTunes album cover: {album}\nWallet: {wallet}\nTimestamp: {timestamp}"
+    try:
+        msg       = encode_defunct(text=message)
+        recovered = Account.recover_message(msg, signature=signature).lower()
+        if recovered != wallet:
+            return jsonify({'error': 'Signature does not match wallet'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature error: {e}'}), 401
+
+    if wallet in get_lt_banned_wallets():
+        return jsonify({'error': 'Wallet is banned from LightTunes'}), 403
+
+    try:
+        filename = _lt_album_thumb_filename(wallet, album)
+        _save_lighttunes_github_thumb(filename, thumbnail)
+        return jsonify({'success': True, 'filename': filename})
+    except Exception as e:
+        return jsonify({'error': f'Save failed: {e}'}), 500
+
 
 @app.route('/api/lighttunes/upload-progress/<job_id>', methods=['GET'])
 def lighttunes_upload_progress(job_id):
