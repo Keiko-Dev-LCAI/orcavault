@@ -3714,6 +3714,57 @@ def lighttunes_set_album_cover():
         return jsonify({'error': f'Save failed: {e}'}), 500
 
 
+@app.route('/api/lighttunes/set-song-thumbnail', methods=['POST'])
+def lighttunes_set_song_thumbnail():
+    """Uploader sets or updates the cover thumbnail for one of their own songs."""
+    data      = request.get_json(force=True) or {}
+    wallet    = (data.get('wallet', '') or '').strip().lower()
+    song_id   = str(data.get('songId', '') or '').strip()
+    signature = (data.get('signature', '') or '').strip()
+    timestamp = str(data.get('timestamp', '') or '').strip()
+    thumbnail = (data.get('thumbnail', '') or '').strip()
+
+    if not all([wallet, song_id, signature, thumbnail]):
+        return jsonify({'error': 'Missing required fields'}), 400
+    if not song_id.isdigit():
+        return jsonify({'error': 'Invalid songId'}), 400
+
+    message = f"LightTunes song thumbnail: {song_id}\nWallet: {wallet}\nTimestamp: {timestamp}"
+    try:
+        msg       = encode_defunct(text=message)
+        recovered = Account.recover_message(msg, signature=signature).lower()
+        if recovered != wallet:
+            return jsonify({'error': 'Signature does not match wallet'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature error: {e}'}), 401
+
+    if wallet in get_lt_banned_wallets():
+        return jsonify({'error': 'Wallet is banned from LightTunes'}), 403
+
+    # Verify on-chain that this wallet actually uploaded the song
+    try:
+        if not LIGHTTUNES_V1_ADDRESS:
+            return jsonify({'error': 'LIGHTTUNES_V1_ADDRESS not configured'}), 400
+        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+        contract = w3_local.eth.contract(
+            address=Web3.to_checksum_address(LIGHTTUNES_V1_ADDRESS), abi=LIGHTTUNES_ABI)
+        logs = contract.events.SongCreated().get_logs(
+            from_block=0, argument_filters={'songId': int(song_id)})
+        if not logs:
+            return jsonify({'error': 'Song not found on chain'}), 404
+        uploader = logs[0]['args']['uploader'].lower()
+        if uploader != wallet:
+            return jsonify({'error': 'Not the song uploader'}), 403
+    except Exception as e:
+        return jsonify({'error': f'Chain verification failed: {e}'}), 500
+
+    try:
+        _save_lighttunes_github_thumb(f"v1_{song_id}.jpg", thumbnail)
+        return jsonify({'success': True, 'filename': f"v1_{song_id}.jpg"})
+    except Exception as e:
+        return jsonify({'error': f'Save failed: {e}'}), 500
+
+
 @app.route('/api/lighttunes/upload-progress/<job_id>', methods=['GET'])
 def lighttunes_upload_progress(job_id):
     job = lt_song_jobs.get(job_id)
