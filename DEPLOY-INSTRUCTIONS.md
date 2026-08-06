@@ -83,7 +83,7 @@ Replace `YOUR_TOKEN` with your actual PAT token (the one starting with `ghp_`).
 
 **Example:**
 ```bash
-git push https://<GITHUB_TOKEN>@github.com/Keiko-Dev-LCAI/orcavault.git main
+git push https://<TOKEN>@github.com/Keiko-Dev-LCAI/orcavault.git main
 ```
 
 You should see: `Branch 'main' set up to track remote branch 'main'` — that means it worked! ✅
