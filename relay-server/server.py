@@ -42,7 +42,12 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 app = Flask(__name__)
-CORS(app)
+# Scoped CORS — override with CORS_ORIGINS env (comma-separated)
+_CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    "CORS_ORIGINS",
+    "https://orcavault.win,https://lighttube.win,http://localhost:5000,http://127.0.0.1:5000"
+).split(",") if o.strip()]
+CORS(app, origins=_CORS_ORIGINS)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -83,9 +88,10 @@ _AIVM_JOB_FEE  = 20_000_000_000_000_000   # 0.02 LCAI in wei
 _AIVM_CHAIN_ID = 9200
 GITHUB_THUMB_REPO        = "Keiko-Dev-LCAI/lighttube"
 GITHUB_THUMB_BRANCH      = "main"
-CHUNK_SIZE               = 90_000            # 90KB per chunk — Lightchain RPC hard limit is 128KB/tx
+# On-chain dataURI slice size. RPC hard limit ~128KB/tx; leave headroom for ABI wrapping.
+CHUNK_SIZE               = int(os.environ.get("LT_CHUNK_SIZE", "115000"))  # was 90KB; larger = fewer txs
 CHAIN_ID                 = 9200
-CHUNK_BATCH_SIZE         = int(os.environ.get("CHUNK_BATCH_SIZE", "10"))  # parallel chunks per batch
+CHUNK_BATCH_SIZE         = int(os.environ.get("CHUNK_BATCH_SIZE", "20"))  # parallel on-chain chunk txs per batch
 # Lightchain RPC rejects txs whose gas*gasPrice exceeds this (default 1 LCAI).
 LT_TX_FEE_CAP_WEI        = int(os.environ.get("LT_TX_FEE_CAP_WEI", str(10**18)))
 LT_CHUNK_GAS_DEFAULT     = int(os.environ.get("LT_CHUNK_GAS_DEFAULT", "3000000"))
@@ -100,6 +106,16 @@ _nonce_lock = threading.Lock()
 _relay_job_lock = threading.Lock()
 _ACTIVE_LT_JOB_STATUSES = frozenset({'receiving', 'initializing', 'repairing', 'uploading', 'pending'})
 _LT_JOB_STALE_SECS      = int(os.environ.get('LT_JOB_STALE_SECS', '1800'))  # 30 min
+# Per-job locks so parallel upload-piece requests can seek/write safely
+_lt_piece_locks = {}
+_lt_piece_locks_guard = threading.Lock()
+
+
+def _job_piece_lock(job_id):
+    with _lt_piece_locks_guard:
+        if job_id not in _lt_piece_locks:
+            _lt_piece_locks[job_id] = threading.Lock()
+        return _lt_piece_locks[job_id]
 
 # Stream cache builds — assemble on-chain chunks to disk for HTTP Range playback.
 _stream_builds      = {}
@@ -1222,7 +1238,7 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, t
         # ── addVideoChunkFor × N (adaptive parallel batches) ──────────────────
         _MAX_BATCH = 25   # never go above this
         _MIN_BATCH = 8    # never go below this
-        batch_size = max(CHUNK_BATCH_SIZE, 15)  # start at 15 (or env var if higher)
+        batch_size = max(CHUNK_BATCH_SIZE, 20)  # start at 20 (or env var if higher)
         chunk_idx  = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
             while chunk_idx < len(chunks):
@@ -1421,6 +1437,9 @@ def lighttube_upload_init():
             return _relay_busy_error()
 
     file_size = int(form.get('fileSize', data.get('fileSize', 0)) or 0)
+    piece_size = int(form.get('pieceSize', data.get('pieceSize', 0)) or 0)
+    if piece_size <= 0 and total_pieces > 0 and file_size > 0:
+        piece_size = (file_size + total_pieces - 1) // total_pieces
     job_id    = str(uuid.uuid4())
 
     # Repair cache hit — skip 2 GB re-upload when Railway restarts mid-repair.
@@ -1452,8 +1471,13 @@ def lighttube_upload_init():
             print(f"[repair] job {job_id}: using cached file for video {repair_video_id} ({file_size} bytes)")
             return jsonify({'jobId': job_id, 'cached': True})
 
-    # Create a temp file to receive the incoming pieces
+    # Create a temp file to receive the incoming pieces (pre-size if known for parallel seeks)
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.tmp')
+    if file_size > 0:
+        try:
+            tmp.truncate(file_size)
+        except Exception:
+            pass
     tmp.close()
 
     lt_upload_jobs[job_id] = {
@@ -1463,7 +1487,9 @@ def lighttube_upload_init():
         'videoId':         None,
         'error':           None,
         'pieces_received': 0,
+        'pieces_got':      set(),
         'total_pieces':    total_pieces,
+        'piece_size':      piece_size,
         'tmp_path':        tmp.name,
         'wallet':          wallet,
         'title':           title,
@@ -1495,12 +1521,16 @@ def lighttube_cancel_jobs():
 @app.route('/api/lighttube/upload-piece', methods=['POST'])
 def lighttube_upload_piece():
     """
-    Append one binary piece to a chunked upload session.
+    Write one binary piece into a chunked upload session (supports parallel pieces).
     Form fields: jobId (string), pieceIndex (int), piece (file/blob)
     Returns: {ok: true, piecesReceived: N}
     """
     job_id     = request.form.get('jobId', '').strip()
     piece_file = request.files.get('piece')
+    try:
+        piece_index = int(request.form.get('pieceIndex', -1))
+    except (TypeError, ValueError):
+        piece_index = -1
 
     if not job_id or not piece_file:
         return jsonify({'error': 'Missing jobId or piece'}), 400
@@ -1512,28 +1542,54 @@ def lighttube_upload_piece():
     if job['status'] != 'receiving':
         return jsonify({'error': 'Job not in receiving state'}), 400
 
-    # Append piece to the temp file
-    with open(job['tmp_path'], 'ab') as f:
-        f.write(piece_file.read())
+    data = piece_file.read()
+    if not data:
+        return jsonify({'error': 'Empty piece'}), 400
 
-    job['pieces_received'] += 1
+    lock = _job_piece_lock(job_id)
+    with lock:
+        got = job.setdefault('pieces_got', set())
+        if piece_index in got:
+            return jsonify({'ok': True, 'piecesReceived': len(got), 'duplicate': True})
 
-    # All pieces received — cache repair files, then kick off background processing
-    if job['pieces_received'] >= job['total_pieces']:
-        repair_vid = job.get('repair_video_id')
-        if repair_vid is not None and not job.get('from_cache'):
-            try:
-                fsize     = os.path.getsize(job['tmp_path'])
-                cache_dst = _repair_cache_path(repair_vid, fsize)
-                shutil.copy2(job['tmp_path'], cache_dst)
-                print(f"[repair] cached video {repair_vid} file ({fsize} bytes) → {cache_dst}")
-            except Exception as err:
-                print(f"[repair] cache save failed: {err}")
-        job['status'] = 'initializing'
-        t = threading.Thread(target=_process_chunked_upload, args=(job_id,), daemon=True)
-        t.start()
+        piece_size = int(job.get('piece_size') or 0)
+        # Prefer seek-by-index for parallel uploads; fall back to append for old clients
+        if piece_index >= 0 and piece_size > 0:
+            with open(job['tmp_path'], 'r+b') as f:
+                f.seek(piece_index * piece_size)
+                f.write(data)
+        elif piece_index >= 0 and job.get('file_size'):
+            # Derive nominal piece size from fileSize / totalPieces
+            tp = max(int(job.get('total_pieces') or 1), 1)
+            ps = (int(job['file_size']) + tp - 1) // tp
+            job['piece_size'] = ps
+            with open(job['tmp_path'], 'r+b') as f:
+                f.seek(piece_index * ps)
+                f.write(data)
+        else:
+            with open(job['tmp_path'], 'ab') as f:
+                f.write(data)
 
-    return jsonify({'ok': True, 'piecesReceived': job['pieces_received']})
+        got.add(piece_index if piece_index >= 0 else len(got))
+        job['pieces_received'] = len(got)
+        pieces_received = job['pieces_received']
+        done = pieces_received >= job['total_pieces']
+
+        if done:
+            repair_vid = job.get('repair_video_id')
+            if repair_vid is not None and not job.get('from_cache'):
+                try:
+                    fsize     = os.path.getsize(job['tmp_path'])
+                    cache_dst = _repair_cache_path(repair_vid, fsize)
+                    shutil.copy2(job['tmp_path'], cache_dst)
+                    print(f"[repair] cached video {repair_vid} file ({fsize} bytes) → {cache_dst}")
+                except Exception as err:
+                    print(f"[repair] cache save failed: {err}")
+            job['status'] = 'initializing'
+            t = threading.Thread(target=_process_chunked_upload, args=(job_id,), daemon=True)
+            t.start()
+
+    return jsonify({'ok': True, 'piecesReceived': pieces_received})
 
 
 def _process_chunked_upload(job_id):
@@ -1711,7 +1767,7 @@ def _process_chunked_upload(job_id):
             # ── addVideoChunkFor × N (adaptive parallel batches) ────────────
             _MAX_BATCH = 25
             _MIN_BATCH = 8
-            batch_size = max(CHUNK_BATCH_SIZE, 15)
+            batch_size = max(CHUNK_BATCH_SIZE, 20)
             chunk_idx  = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
                 while chunk_idx < len(chunks):
