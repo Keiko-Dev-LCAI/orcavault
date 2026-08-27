@@ -247,6 +247,13 @@ input[type=file]{display:none}
 .memory-full-media{width:100%;max-height:calc(100vh - 280px);object-fit:contain;border-radius:12px;background:var(--bg3);display:block}
 .memory-full-audio{width:100%;margin-top:20px}
 .memory-text-content{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:28px;font-size:18px;line-height:1.8;white-space:pre-wrap}
+.office-doc-body{font-size:16px;line-height:1.7;color:#111}
+.office-doc-body img{max-width:100%;height:auto}
+.office-doc-body table{border-collapse:collapse;width:100%;margin:12px 0}
+.office-doc-body td,.office-doc-body th{border:1px solid #ccc;padding:6px 10px}
+.office-sheet-body{font-size:14px;color:#111;overflow:auto}
+.office-sheet-body table{border-collapse:collapse;margin-bottom:8px}
+.office-sheet-body td,.office-sheet-body th{border:1px solid #ccc;padding:4px 8px;white-space:nowrap}
 .memory-meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}
 .memory-meta-item{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
 .memory-meta-key{font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
@@ -2469,6 +2476,74 @@ function formatStreamEta(seconds) {
   return `~${(seconds / 3600).toFixed(1)} hr left`;
 }
 
+// Lazy-load an external script once (used for Word/Excel preview libraries).
+const _loadedScripts = {};
+function loadScriptOnce(url) {
+  if (_loadedScripts[url]) return _loadedScripts[url];
+  _loadedScripts[url] = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = url; s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => { delete _loadedScripts[url]; reject(new Error('Failed to load ' + url)); };
+    document.head.appendChild(s);
+  });
+  return _loadedScripts[url];
+}
+
+// Decode a base64 data: URI into an ArrayBuffer (for mammoth / SheetJS).
+function dataURIToArrayBuffer(dataURI) {
+  const comma = dataURI.indexOf(',');
+  const b64   = dataURI.slice(comma + 1);
+  const bin   = atob(b64);
+  const len   = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+// Assemble a chunked memory directly in the browser from on-chain ChunkStored
+// events. Instant for small docs/images, needs no relay, and yields a real
+// data: URI the inline viewers can render. (Large video/audio still stream.)
+async function assembleChunkedDataURI(rc, memoryId, totalChunks, onProgress) {
+  const parts = new Array(totalChunks).fill(null);
+  const evs   = await rc.queryFilter(rc.filters.ChunkStored(memoryId), 0, 'latest');
+  for (const ev of evs) {
+    const ci = Number(ev.args[1]);        // chunkIndex
+    if (ci >= 0 && ci < totalChunks) parts[ci] = ev.args[3];  // chunkData (later event wins)
+  }
+  const missing = [];
+  for (let i = 0; i < totalChunks; i++) if (parts[i] === null) missing.push(i);
+  if (missing.length) {
+    throw new Error(`Missing chunk${missing.length > 1 ? 's' : ''} ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''} — this upload may be incomplete.`);
+  }
+  if (onProgress) onProgress(totalChunks, totalChunks);
+  return parts.join('');
+}
+
+// Decide how to RENDER a memory from its actual bytes (MIME) rather than the
+// category the uploader happened to pick. Falls back to the stored memType.
+function detectRenderKind(mem) {
+  const uri = mem.dataURI || '';
+  if (mem.memType === 'website') return 'website';
+  if (!/^data:/i.test(uri)) {
+    // Not a data: URI — raw text payload or a bare URL.
+    if (mem.memType === 'text') return 'text';
+    if (/^https?:/i.test(uri)) return 'website';
+    return mem.memType || 'document';
+  }
+  const m    = /^data:([^;,]+)/i.exec(uri);
+  const mime = m ? m[1].toLowerCase() : '';
+  if (mime.startsWith('image/')) return 'photo';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'word';
+  if (mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      mime === 'application/vnd.ms-excel' || mime === 'text/csv') return 'excel';
+  if (mime.startsWith('text/')) return 'textfile';
+  return 'document';
+}
+
 async function waitForOvRelayStream(statusUrl, totalChunks, onProgress) {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let lastProgress = 0;
@@ -2538,15 +2613,27 @@ async function loadAndShowMemory(vaultId, idx) {
       }
     }
 
-    // Chunked playback — relay HTTP Range stream (no in-browser assembly)
+    // Chunked playback. Small / non-streaming memories (docs, photos, text) are
+    // assembled directly in the browser from on-chain chunks — instant, no relay.
+    // Only large video/audio use the relay HTTP Range stream.
     if (mem._isChunked) {
       const isV3     = mem._source === 'v3relay' || mem._contract === 'v3';
       const ver      = isV3 ? 'v3' : 'v2';
       const cacheKey = ver + '-' + mem._memoryId;
+      const rc       = isV3 ? readContractV3 : readContractV2;
+      const streamType = (mem.memType === 'video' || mem.memType === 'audio');
       const streamUrl  = `${RELAY_URL}/api/media/stream/orcavault/${ver}/${mem._memoryId}`;
       const statusUrl  = `${streamUrl}/status`;
       if (chunkCache.has(cacheKey)) {
         mem = { ...mem, dataURI: chunkCache.get(cacheKey) };
+      } else if (!streamType && rc) {
+        // In-browser assembly — reads ChunkStored events and rebuilds the data: URI.
+        showLoading('Assembling…', `0 / ${mem._totalChunks.toLocaleString()} chunks from Lightchain`);
+        const assembled = await assembleChunkedDataURI(rc, mem._memoryId, mem._totalChunks, (done, total) => {
+          showLoading(`Assembling… ${Math.round(done / total * 100)}%`, `${done.toLocaleString()} / ${total.toLocaleString()} chunks from Lightchain`);
+        });
+        chunkCache.set(cacheKey, assembled);
+        mem = { ...mem, dataURI: assembled };
       } else {
         const note = 'One-time prep on relay — replays are instant for everyone';
         const updatePrep = (data, eta) => {
@@ -2625,49 +2712,93 @@ async function loadAndShowMemory(vaultId, idx) {
     let mediaHtml = `<h2 style="font-size:26px;font-weight:800;margin-bottom:8px">${escHtml(mem.title)}</h2>`;
     if (mem.caption) mediaHtml += `<p style="font-size:17px;color:var(--muted);margin-bottom:20px;line-height:1.6">${escHtml(mem.caption)}</p>`;
 
-    if (mem.memType === 'photo') {
+    // Render by the file's actual type (MIME) rather than the category picked at upload.
+    const kind = detectRenderKind(mem);
+    const docBtnRow = `<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:16px">
+        <a class="btn btn-gold" href="${escHtml(mem.dataURI)}" download="${escHtml(mem.title)}">⬇️ Download</a>
+        <button class="btn btn-outline" onclick="printMemoryDoc()">🖨️ Print</button>
+        <button class="btn btn-outline" onclick="sidebarShareMemory()">📤 Share</button>
+      </div>`;
+    let _officePreview = null;  // {mode:'word'|'excel', dataURI} to render after the DOM is in place
+
+    if (kind === 'photo') {
       mediaHtml += `<img class="memory-full-media" src="${escHtml(mem.dataURI)}" alt="${escHtml(mem.title)}">`;
-    } else if (mem.memType === 'video') {
+    } else if (kind === 'video') {
       mediaHtml += `<video class="memory-full-media" src="${escHtml(mem.dataURI)}" controls></video>`;
-    } else if (mem.memType === 'audio') {
+    } else if (kind === 'audio') {
       mediaHtml += `<div style="padding:40px;text-align:center;font-size:64px;margin-bottom:20px">🎵</div><audio class="memory-full-audio" src="${escHtml(mem.dataURI)}" controls></audio>`;
-    } else if (mem.memType === 'text') {
+    } else if (kind === 'text') {
       mediaHtml += `<div class="memory-text-content">${escHtml(mem.dataURI)}</div>`;
-    } else if (mem.memType === 'document') {
-      const isPdf = /^data:application\/pdf/i.test(mem.dataURI || '');
-      const docBtnRow = `<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:16px">
-          <a class="btn btn-gold" href="${escHtml(mem.dataURI)}" download="${escHtml(mem.title)}">⬇️ Download</a>
-          <button class="btn btn-outline" onclick="printMemoryDoc()">🖨️ Print</button>
-          <button class="btn btn-outline" onclick="sidebarShareMemory()">📤 Share</button>
-        </div>`;
-      if (isPdf) {
-        // Inline preview — PDFs render in-page so viewers don't have to download to read.
-        mediaHtml += `<iframe class="memory-doc-viewer" src="${escHtml(mem.dataURI)}" title="${escHtml(mem.title)}" style="width:100%;height:75vh;min-height:480px;border:1px solid var(--border);border-radius:12px;background:#fff"></iframe>
-        <div style="font-size:14px;color:var(--muted);text-align:center;margin-top:8px">If the document doesn't display above, use Download or Print.</div>
-        ${docBtnRow}`;
-      } else {
-        // Non-PDF documents (DOC/TXT) can't reliably preview inline — offer download/print.
-        mediaHtml += `<div style="text-align:center;padding:60px 20px">
-          <div style="font-size:80px;margin-bottom:16px">📄</div>
-          <div style="font-size:20px;font-weight:700;margin-bottom:8px">${escHtml(mem.title)}</div>
-          <div style="font-size:15px;color:var(--muted);margin-bottom:4px">Inline preview isn't available for this file type — download or print to view it.</div>
-          ${docBtnRow}
-        </div>`;
-      }
-    } else if (mem.memType === 'website') {
+    } else if (kind === 'textfile') {
+      // Plain-text file stored as a data: URI — decode and show inline.
+      let txt = '';
+      try { txt = new TextDecoder().decode(new Uint8Array(dataURIToArrayBuffer(mem.dataURI))); } catch(_) {}
+      mediaHtml += `<div class="memory-text-content">${escHtml(txt)}</div>${docBtnRow}`;
+    } else if (kind === 'pdf') {
+      // Inline preview — PDFs render in-page so viewers don't have to download to read.
+      mediaHtml += `<iframe class="memory-doc-viewer" src="${escHtml(mem.dataURI)}" title="${escHtml(mem.title)}" style="width:100%;height:75vh;min-height:480px;border:1px solid var(--border);border-radius:12px;background:#fff"></iframe>
+      <div style="font-size:14px;color:var(--muted);text-align:center;margin-top:8px">If the document doesn't display above, use Download or Print.</div>
+      ${docBtnRow}`;
+    } else if (kind === 'word' || kind === 'excel') {
+      // In-browser Office preview — rendered locally after the DOM mounts (no upload to any 3rd party).
+      mediaHtml += `<div id="vm-office-preview" style="background:#fff;color:#111;border:1px solid var(--border);border-radius:12px;padding:24px;min-height:220px;overflow:auto;max-height:75vh">
+        <div style="text-align:center;color:#666;padding:40px 0">⏳ Rendering preview…</div>
+      </div>${docBtnRow}`;
+      _officePreview = { mode: kind, dataURI: mem.dataURI };
+    } else if (kind === 'website') {
       const url = mem.dataURI || '';
       mediaHtml += `<div style="text-align:center;padding:60px 20px">
         <div style="font-size:80px;margin-bottom:16px">🔗</div>
         <div style="font-size:20px;font-weight:700;margin-bottom:20px">${escHtml(mem.title)}</div>
         ${url ? `<a class="btn btn-gold" href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">🌐 Visit Archived URL</a>` : ''}
       </div>`;
+    } else {
+      // Unknown / non-previewable file — clean download card.
+      mediaHtml += `<div style="text-align:center;padding:60px 20px">
+        <div style="font-size:80px;margin-bottom:16px">📄</div>
+        <div style="font-size:20px;font-weight:700;margin-bottom:8px">${escHtml(mem.title)}</div>
+        <div style="font-size:15px;color:var(--muted);margin-bottom:4px">This file type can't be previewed in the browser — download or print to view it.</div>
+        ${docBtnRow}
+      </div>`;
     }
     // date is already shown in sidebar Details — not repeated here
     mc.innerHTML = mediaHtml;
     hideLoading();
+    if (_officePreview) renderOfficePreview(_officePreview.mode, _officePreview.dataURI);
   } catch(e) {
     hideLoading();
     document.getElementById('vm-media-container').innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Could not load memory</div><div class="empty-state-sub">${e.message||e}</div></div>`;
+  }
+}
+
+// Render a Word (.docx) or Excel/CSV file inline, entirely in the browser.
+// Nothing is uploaded to any third-party viewer — the bytes never leave the page.
+const MAMMOTH_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
+const SHEETJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+async function renderOfficePreview(mode, dataURI) {
+  const host = document.getElementById('vm-office-preview');
+  if (!host) return;
+  try {
+    const buf = dataURIToArrayBuffer(dataURI);
+    if (mode === 'word') {
+      await loadScriptOnce(MAMMOTH_CDN);
+      const result = await window.mammoth.convertToHtml({ arrayBuffer: buf });
+      host.innerHTML = `<div class="office-doc-body">${result.value || '<em>Empty document.</em>'}</div>`;
+    } else {
+      await loadScriptOnce(SHEETJS_CDN);
+      const wb = window.XLSX.read(buf, { type: 'array' });
+      let html = '';
+      wb.SheetNames.forEach((name, i) => {
+        html += `<div style="font-weight:700;margin:${i ? '24' : '0'}px 0 8px">${escHtml(name)}</div>`;
+        html += window.XLSX.utils.sheet_to_html(wb.Sheets[name], { editable: false });
+      });
+      host.innerHTML = `<div class="office-sheet-body">${html || '<em>Empty workbook.</em>'}</div>`;
+    }
+  } catch (err) {
+    host.innerHTML = `<div style="text-align:center;color:#666;padding:30px 10px">
+      <div style="font-size:15px;margin-bottom:6px">Couldn't render an inline preview for this file.</div>
+      <div style="font-size:13px">Use Download or Print below to open it.</div>
+    </div>`;
   }
 }
 
