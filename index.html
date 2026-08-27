@@ -962,7 +962,7 @@ footer a{color:var(--gold);text-decoration:none}
       </div>
     </div>
 
-    <div class="warn-banner">⛽ <strong>Files under 2MB</strong>: stored in one transaction. <strong>Larger files</strong>: automatically split into 2MB chunks — any size supported. Gas is essentially free on Lightchain. Make sure you have LCAI in your wallet.</div>
+    <div class="warn-banner">⛽ <strong>Small files</strong>: stored in one transaction. <strong>Larger files</strong>: automatically split into ~90KB chunks — any size supported. Gas is essentially free on Lightchain. Make sure you have LCAI in your wallet.</div>
 
     <!-- ⚡ One-click relay upload (shown when wallet has relay access) -->
     <div id="relay-upload-section" style="display:none;margin-top:8px">
@@ -1604,6 +1604,13 @@ async function connectWallet() {
     updateRecoveryPanels();
     showToast('Wallet connected! ' + shortAddr(wallet));
     if (RELAY_URL && V3_CONTRACT_ADDRESS) { checkRelayAccess(wallet); }
+    // If the wallet was connected while already viewing an archive, re-render
+    // it so owner controls (+ Add Memory) appear immediately — previously the
+    // user had to reopen the archive via My Archives for ownership to register.
+    const viewScreen = document.getElementById('screen-view-archive');
+    if (viewScreen && viewScreen.classList.contains('active') && currentVaultId !== null) {
+      loadAndShowVault(currentVaultId);
+    }
     return true;
   } catch(e) {
     hideLoading();
@@ -1897,10 +1904,13 @@ async function createVault() {
     hideLoading();
     currentVaultId = vaultId;
     updateRecoveryPanels();
-    const shareUrl = getVaultURL(vaultId);
-    openShareModal('🎉 Archive Created!', 'Your "' + name + '" archive is live on Lightchain forever.', shareUrl, () => {
-      loadAndShowVault(vaultId);
-    });
+    btn.disabled = false;
+    // The archive is just an empty container at this point. Route the owner
+    // straight into Add Memory so it's clear the document still needs to be
+    // stored — the old "Archive Created!" share modal implied it was done.
+    await loadAndShowVault(vaultId);
+    showToast('✅ Archive created. Now add your first document to store it on-chain.');
+    goAddMemory();
   } catch(e) {
     hideLoading();
     btn.disabled = false;
@@ -2597,6 +2607,8 @@ async function loadAndShowMemory(vaultId, idx) {
     // Creator delete — show only to the uploader
     _currentViewMemIdx     = idx;
     _currentViewMemAddedBy = mem.addedBy;
+    _vmDataURI             = mem.dataURI || '';
+    _vmTitle               = mem.title || 'document';
     const deleteWrap = document.getElementById('creator-delete-wrap');
     if (deleteWrap) {
       const isOwner = wallet && mem.addedBy && wallet.toLowerCase() === mem.addedBy.toLowerCase();
@@ -2625,7 +2637,11 @@ async function loadAndShowMemory(vaultId, idx) {
       mediaHtml += `<div style="text-align:center;padding:60px 20px">
         <div style="font-size:80px;margin-bottom:16px">📄</div>
         <div style="font-size:20px;font-weight:700;margin-bottom:20px">${escHtml(mem.title)}</div>
-        <a class="btn btn-gold" href="${escHtml(mem.dataURI)}" download="${escHtml(mem.title)}">⬇️ Download Document</a>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+          <a class="btn btn-gold" href="${escHtml(mem.dataURI)}" download="${escHtml(mem.title)}">⬇️ Download</a>
+          <button class="btn btn-outline" onclick="printMemoryDoc()">🖨️ Print</button>
+          <button class="btn btn-outline" onclick="sidebarShareMemory()">📤 Share</button>
+        </div>
       </div>`;
     } else if (mem.memType === 'website') {
       const url = mem.dataURI || '';
@@ -2974,7 +2990,9 @@ async function storeMemory() {
   btn.disabled = true;
 
   // Route: chunked (V2) or single (V1/V2)
-  if (dataURI.length > 2 * 1024 * 1024 && V2_CONTRACT_ADDRESS && contractV2) {
+  // Lightchain RPC rejects any single tx over 128KB. A base64 dataURI inflates
+  // the raw file ~33%, so anything larger than one 90KB chunk must go chunked.
+  if (dataURI.length > 90_000 && V2_CONTRACT_ADDRESS && contractV2) {
     const { chunks, totalTx, estimatedMinutes, estimatedSeconds } = estimateUpload(dataURI.length);
     const fileMB = (dataURI.length / 1024 / 1024).toFixed(2);
     const timeStr = estimatedMinutes > 0
@@ -2989,6 +3007,13 @@ async function storeMemory() {
     pendingChunkUpload = { title, caption, date, dataURI, memType: currentMemType, visibility: currentVisibility };
     document.getElementById('modal-chunk-confirm').classList.remove('hidden');
     btn.disabled = false;
+    return;
+  }
+
+  // Guard: file too large for a single tx but chunked path unavailable
+  if (dataURI.length > 90_000) {
+    btn.disabled = false;
+    showToast('This file is too large to store on-chain right now (chunked upload unavailable). Try again later or contact support.', true);
     return;
   }
 
@@ -3550,7 +3575,7 @@ function setVisibility(v) {
   const ackWrap = document.getElementById('vis-ack-wrap');
   if (pubBtn)  { pubBtn.className  = 'vis-btn' + (v === 'public'  ? ' active-public'  : ''); }
   if (privBtn) { privBtn.className = 'vis-btn' + (v === 'private' ? ' active-private' : ''); }
-  if (ackWrap) { ackWrap.style.display = v === 'public' ? '' : 'none'; }
+  if (ackWrap) { ackWrap.style.display = v === 'public' ? 'block' : 'none'; }
   if (v === 'private' && document.getElementById('vis-ack-check')) {
     document.getElementById('vis-ack-check').checked = false;
   }
@@ -3806,6 +3831,17 @@ async function reportMemory() {
 // ════════════════════════════════════════════════════════
 let _currentViewMemIdx = null;
 let _currentViewMemAddedBy = null;
+let _vmDataURI = '';
+let _vmTitle = 'document';
+
+// Open the current document in a new tab so the browser's native viewer
+// (with its own print control / Ctrl+P) can print it. Reliable across
+// browsers for PDFs; base64 data URIs open directly.
+function printMemoryDoc() {
+  if (!_vmDataURI) { showToast('Nothing to print', true); return; }
+  const w = window.open(_vmDataURI, '_blank');
+  if (!w) { showToast('Allow pop-ups to open this document for printing', true); return; }
+}
 
 async function creatorDeleteMemory() {
   if (!wallet || !RELAY_URL) return;
