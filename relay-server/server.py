@@ -2597,6 +2597,8 @@ def relay_upload():
     mem_type      = body.get('memType', 'video').strip()
     template      = body.get('template', '').strip()
     data_uri      = body.get('dataURI', '')
+    signature     = (body.get('signature', '') or '').strip()
+    timestamp     = str(body.get('timestamp', '') or '').strip()
 
     if not owner_address or not data_uri:
         return jsonify({'error': 'ownerAddress and dataURI are required'}), 400
@@ -2605,6 +2607,25 @@ def relay_upload():
         owner_address = Web3.to_checksum_address(owner_address)
     except Exception:
         return jsonify({'error': 'Invalid owner address'}), 400
+
+    # ── Verify wallet ownership ───────────────────────────────────────────────
+    # One off-chain signature proves the caller controls owner_address before the
+    # relay spends gas uploading on their behalf. Message must match the client.
+    if not signature or not timestamp:
+        return jsonify({'error': 'Missing signature — reconnect your wallet and try the upload again'}), 401
+    try:
+        expected_message = (
+            "OrcaVault one-click upload\n"
+            f"Wallet: {owner_address.lower()}\n"
+            f"Timestamp: {timestamp}"
+        )
+        recovered = Account.recover_message(
+            encode_defunct(text=expected_message), signature=signature
+        )
+        if Web3.to_checksum_address(recovered) != owner_address:
+            return jsonify({'error': 'Signature does not match wallet'}), 401
+    except Exception as e:
+        return jsonify({'error': f'Signature error: {e}'}), 401
 
     # ── Access check ──────────────────────────────────────────────────────────
     if not has_relay_access(owner_address):

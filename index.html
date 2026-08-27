@@ -1560,7 +1560,7 @@ function copyDappLink() {
     var orig = btn.innerHTML;
     btn.innerHTML = '<span style="font-size:28px">✅</span><div style="text-align:left"><div style="font-size:18px;font-weight:700">Copied!</div><div style="font-size:15px;color:var(--muted)">Paste into your wallet browser</div></div>';
     setTimeout(function() { btn.innerHTML = orig; }, 2000);
-  }).catch(function() { alert(OV_DAPP_URL); });
+  }).catch(function() { showToast('Copy this link into your wallet browser: ' + OV_DAPP_URL, true); });
 }
 
 async function connectWallet() {
@@ -3013,7 +3013,7 @@ async function storeMemory() {
   // Guard: file too large for a single tx but chunked path unavailable
   if (dataURI.length > 90_000) {
     btn.disabled = false;
-    showToast('This file is too large to store on-chain right now (chunked upload unavailable). Try again later or contact support.', true);
+    showToast('This file needs the chunked upload, which isn\'t available right now. Reconnect your wallet and try again, or use one-click relay upload.', true);
     return;
   }
 
@@ -3116,13 +3116,24 @@ async function doChunkedUpload(title, caption, date, dataURI, memType) {
 
     resetAddMemoryForm();
     updateRecoveryPanels();
-    showToast(`✅ Stored in ${totalChunks} chunks! Memory ID: ${memoryId}`);
-    loadAndShowVault(currentVaultId);
+    // Show the same share popup single-file uploads get, with a direct verify link.
+    // V2 chunked memories are indexed at 200000 + memoryId in the viewer.
+    const shareUrl = getMemoryURL(currentVaultId, 200000 + memoryId);
+    openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain!', shareUrl, () => {
+      loadAndShowVault(currentVaultId);
+    });
 
   } catch(e) {
     overlay.style.display = 'none';
     document.getElementById('btn-store-memory').disabled = false;
-    showToast('Chunked upload failed: ' + (e.reason || e.message || e), true);
+    // Be honest about partial state: if initMemory already succeeded, some chunks may be stored.
+    const stored = (memoryId !== null);
+    showToast(
+      stored
+        ? 'Upload interrupted after it started saving — this memory may be incomplete. Reopen the archive to check, or run the upload again. (' + (e.reason || e.message || e) + ')'
+        : 'Upload failed before anything was stored — nothing was saved, so it is safe to retry. (' + (e.reason || e.message || e) + ')',
+      true
+    );
   }
 }
 
@@ -3195,7 +3206,23 @@ async function doRelayUpload() {
   const btn      = document.getElementById('btn-relay-upload');
   if (btn) btn.disabled = true;
 
-  showLoading('Sending to relay…', 'No wallet confirmations needed. The relay is handling all transactions — this may take a minute for large files.');
+  // ── One off-chain signature authorizes the relay to store every chunk for you ──
+  // No gas, no per-chunk taps. The relay verifies this signature proves you own the
+  // wallet before it uploads anything on your behalf.
+  const relayTimestamp = Date.now().toString();
+  let relaySignature = '';
+  try {
+    const s = signer || (provider ? await provider.getSigner() : null);
+    if (!s) throw new Error('No signer available');
+    const message = `OrcaVault one-click upload\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${relayTimestamp}`;
+    relaySignature = await s.signMessage(message);
+  } catch(sigErr) {
+    if (btn) btn.disabled = false;
+    showToast('Approve the signature to authorize your one-click upload, then try again.', true);
+    return;
+  }
+
+  showLoading('Sending to relay…', 'One signature done — no more wallet taps. The relay is storing every chunk for you. This may take a minute for large files.');
 
   try {
     const resp = await fetch(`${RELAY_URL}/api/relay-upload`, {
@@ -3208,6 +3235,8 @@ async function doRelayUpload() {
         memType:      currentMemType || 'document',
         template:     tmplName,
         dataURI:      dataURI,
+        signature:    relaySignature,
+        timestamp:    relayTimestamp,
       })
     });
     const data = await resp.json();
@@ -3217,8 +3246,11 @@ async function doRelayUpload() {
     if (btn) btn.disabled = false;
     resetAddMemoryForm();
     updateRecoveryPanels();
-    showToast(`✅ Uploaded! Memory ID: ${data.memoryId} — stored in ${data.totalChunks} chunk${data.totalChunks === 1 ? '' : 's'}, no wallet taps needed.`);
-    loadAndShowVault(currentVaultId);
+    // Relay-stored (V3) memories are indexed at 300000 + memoryId in the viewer.
+    const shareUrl = getMemoryURL(currentVaultId, 300000 + Number(data.memoryId));
+    openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain — no wallet taps needed!', shareUrl, () => {
+      loadAndShowVault(currentVaultId);
+    });
   } catch(e) {
     hideLoading();
     if (btn) btn.disabled = false;
