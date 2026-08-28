@@ -1453,7 +1453,7 @@ const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small
 const ERC8004_REPUTATION_REGISTRY = '0x62e7E1502Ef822FBfb66554f072b46DF8A8c08D0';
 const ERC8004_AGENT_ID = 1;
 const ERC8004_AGENT_OWNER = '0xBF78164b6626ea8096C4B6b268b0b70f86f66893';
-const OV_BUILD = '20260828i'; // bump to bust browser cache after deploy
+const OV_BUILD = '20260828j'; // bump to bust browser cache after deploy
 (function ovCacheBust() {
   try {
     const k = 'ov_build';
@@ -1852,9 +1852,15 @@ async function ovAdminAct(action, memoryId) {
   // Close any open menus
   document.querySelectorAll('.admin-mod-menu').forEach(m => m.classList.add('hidden'));
   document.body.classList.remove('mod-menu-open');
+  // Cache the admin key in sessionStorage (mirrors LightTube/OrcaMint). This means
+  // the password prompt only happens ONCE per session — even if the wallet session
+  // drops and the page reloads mid-action, the key survives so the removal can
+  // complete without re-prompting.
+  if (!_ovAdminKey) _ovAdminKey = sessionStorage.getItem('ov_ak');
   if (!_ovAdminKey) {
     _ovAdminKey = prompt('Admin key:');
     if (!_ovAdminKey) return;
+    try { sessionStorage.setItem('ov_ak', _ovAdminKey); } catch(_) {}
   }
   try {
     let endpoint, body, successMsg;
@@ -1885,7 +1891,7 @@ async function ovAdminAct(action, memoryId) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      if (res.status === 401) { _ovAdminKey = null; }
+      if (res.status === 401) { _ovAdminKey = null; try { sessionStorage.removeItem('ov_ak'); } catch(_) {} }
       showToast(data.error || 'Failed', true); return;
     }
     // Update local state
@@ -1894,8 +1900,8 @@ async function ovAdminAct(action, memoryId) {
     if (action === 'perm')  { permRemovedMemories.add(String(memoryId)); hiddenMemories.add(String(memoryId)); }
     if (action === 'ban' && data.wallet)  { bannedWallets.add(data.wallet.toLowerCase()); }
     showToast(successMsg);
-    renderMemoriesGrid();
-    if (_browseAllMemories) renderBrowseGrid(_browseCat);
+    // Re-render defensively — a render hiccup must never mask a successful removal.
+    try { renderMemoriesGrid(); if (_browseAllMemories) renderBrowseGrid(_browseCat); } catch(_) {}
   } catch(e) { showToast('Error: ' + e.message, true); }
 }
 
