@@ -1399,6 +1399,7 @@ let readContractV3  = null;    // read-only V3 contract
 const OV_ADMIN_WALLETS = [
   '0xa3a653a8cba0710ff57ac34e2278c603b4259fd3',
   '0x2b6b64cc13dd6d5acabcf3a5dd72b6ee8004de35',
+  '0x69ded8cfe0a9b5e8c00cab7eeb058959a23d7156',
 ];
 let isAdmin             = false;
 let hiddenMemories      = new Set();
@@ -2259,6 +2260,9 @@ function buildMemoryThumbHtml(m, opts = {}) {
   const isOwnerCard = opts.isOwnerCard === true;
   const savedThumb = getSavedThumbForMemory(m);
   const urlCandidates = getThumbUrlCandidates(vaultId, idx, m.title);
+  const adminThumbBtn = (isAdmin && !isOwnerCard)
+    ? `<button onclick="event.stopPropagation();setAdminThumbnail(${vaultId},${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(232,184,75,0.9);border:1px solid var(--gold);color:#1a1a1a;font-size:14px;font-weight:700;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">🛡️ Set thumbnail</button>`
+    : '';
 
   if (savedThumb) {
     return ovThumbImgHtml(vaultId, idx, m.title, savedThumb);
@@ -2291,18 +2295,24 @@ function buildMemoryThumbHtml(m, opts = {}) {
       ? (siblingHasThumb
         ? `<button onclick="event.stopPropagation();copyThumbnailFromSibling(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">📷 Same thumbnail</button>`
         : `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">📷 Set thumbnail</button>`)
-      : '';
+      : adminThumbBtn;
     if (memId != null && RELAY_URL) {
       return `<div class="memory-thumb-placeholder browse-stream-thumb-gen" style="position:relative" data-stream-url="${escHtml(`${RELAY_URL}/api/media/stream/orcavault/${ver}/${memId}`)}" data-vault-id="${vaultId}" data-idx="${idx}" data-icon="${icon}">${icon}${setBtn}</div>`;
     }
   }
-  if (m.memType === 'video' && isOwnerCard) {
+  if (m.memType === 'video' && (isOwnerCard || isAdmin)) {
+    if (!isOwnerCard && isAdmin) {
+      return `<div class="memory-thumb-placeholder" style="position:relative">${icon}${adminThumbBtn}</div>`;
+    }
     const siblings = getThumbSiblingMemories(vaultId, idx, m.title);
     const siblingHasThumb = siblings.some(s => localStorage.getItem('ov_thumb_' + s.idx));
     const setBtn = siblingHasThumb
       ? `<button onclick="event.stopPropagation();copyThumbnailFromSibling(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit">📷 Same thumbnail</button>`
       : `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit">📷 Set thumbnail</button>`;
     return `<div class="memory-thumb-placeholder" style="position:relative">${icon}${setBtn}</div>`;
+  }
+  if (adminThumbBtn) {
+    return `<div class="memory-thumb-placeholder" style="position:relative">${icon}${adminThumbBtn}</div>`;
   }
   return `<div class="memory-thumb-placeholder">${icon}</div>`;
 }
@@ -2481,6 +2491,76 @@ function setVideoThumbnail(idx) {
   input.click();
 }
 
+// ── ADMIN thumbnail override — set a thumbnail on ANY item (no owner signature) ──
+async function uploadAdminThumbnail(vaultId, itemIdxs, dataUrl) {
+  if (!RELAY_URL || !dataUrl) return false;
+  const idxList = [...new Set((Array.isArray(itemIdxs) ? itemIdxs : [itemIdxs]).map(Number))].sort((a, b) => a - b);
+  if (!idxList.length) return false;
+  if (!_ovAdminKey) { _ovAdminKey = prompt('Admin key:'); if (!_ovAdminKey) return false; }
+  try {
+    const body = { vaultId, adminKey: _ovAdminKey, thumbnail: dataUrl };
+    if (idxList.length === 1) body.itemIdx = idxList[0];
+    else body.itemIdxs = idxList;
+    const res = await fetch(`${RELAY_URL}/api/orcavault/set-thumbnail`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (res.status === 401) { _ovAdminKey = null; }
+    return res.ok && data.success;
+  } catch(e) {
+    console.warn('Admin thumbnail upload failed:', e);
+    return false;
+  }
+}
+
+function setAdminThumbnail(vaultId, idx) {
+  if (!isAdmin) return;
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = function() {
+    var file = input.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = 180;
+        var ctx = canvas.getContext('2d');
+        var srcRatio = img.width / img.height;
+        var dstRatio = 320 / 180;
+        var sx, sy, sw, sh;
+        if (srcRatio > dstRatio) {
+          sh = img.height; sw = sh * dstRatio;
+          sx = (img.width - sw) / 2; sy = 0;
+        } else {
+          sw = img.width; sh = sw / dstRatio;
+          sx = 0; sy = (img.height - sh) / 2;
+        }
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 320, 180);
+        var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        uploadAdminThumbnail(vaultId, [idx], dataUrl).then(function(ok) {
+          if (ok) {
+            try { localStorage.setItem('ov_thumb_' + idx, dataUrl); } catch(e) {}
+            showToast('Thumbnail set ✅');
+            renderMemoriesGrid();
+            if (_browseAllMemories) renderBrowseGrid(_browseCat);
+          } else {
+            showToast('Failed to set thumbnail', true);
+          }
+        });
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+  input.click();
+}
+
 function viewMemory(idx) {
   vmVaultId  = currentVaultId;
   vmItemIdx  = idx;
@@ -2546,7 +2626,15 @@ function detectRenderKind(mem) {
   if (!/^data:/i.test(uri)) {
     // Not a data: URI — raw text payload or a bare URL.
     if (mem.memType === 'text') return 'text';
-    if (/^https?:/i.test(uri)) return 'website';
+    if (/^https?:/i.test(uri)) {
+      // A bare URL. If the uploader categorized it as real media (e.g. a large
+      // video stored as a stream link), play it in the proper in-page player
+      // instead of falling through to the external "Visit Archived URL" view.
+      if (mem.memType === 'video') return 'video';
+      if (mem.memType === 'audio') return 'audio';
+      if (mem.memType === 'photo') return 'photo';
+      return 'website';
+    }
     return mem.memType || 'document';
   }
   const m    = /^data:([^;,]+)/i.exec(uri);

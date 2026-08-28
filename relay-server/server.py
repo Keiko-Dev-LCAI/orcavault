@@ -2310,6 +2310,12 @@ def orcavault_set_thumbnail():
     signature = (data.get('signature', '') or '').strip()
     timestamp = (data.get('timestamp', '') or '').strip()
     thumbnail = (data.get('thumbnail', '') or '').strip()
+    admin_key = (data.get('adminKey', '') or '').strip()
+
+    # Admin override: an admin (verified by shared admin key) may set a thumbnail
+    # on ANY item without the original owner's signature. Used for legacy uploads
+    # whose owning wallet is no longer in use.
+    is_admin_req = bool(admin_key) and bool(LIGHTTUBE_ADMIN_KEY) and admin_key == LIGHTTUBE_ADMIN_KEY
 
     if item_idxs is not None:
         try:
@@ -2321,31 +2327,39 @@ def orcavault_set_thumbnail():
     else:
         idx_list = []
 
-    if vault_id is None or not idx_list or not all([wallet, signature, thumbnail]):
-        return jsonify({'error': 'Missing required fields'}), 400
-
-    items_str = ','.join(str(i) for i in idx_list)
-    if len(idx_list) == 1:
-        message = (
-            f"Set thumbnail for Lightchain Archives memory vault={vault_id} item={idx_list[0]}\n"
-            f"Wallet: {wallet}\nTimestamp: {timestamp}"
-        )
+    if is_admin_req:
+        # Admin path — only need the target items + thumbnail; skip signature/owner checks.
+        if vault_id is None or not idx_list or not thumbnail:
+            return jsonify({'error': 'Missing required fields'}), 400
     else:
-        message = (
-            f"Set thumbnail for Lightchain Archives memory vault={vault_id} items={items_str}\n"
-            f"Wallet: {wallet}\nTimestamp: {timestamp}"
-        )
-    try:
-        msg       = encode_defunct(text=message)
-        recovered = Account.recover_message(msg, signature=signature).lower()
-        if recovered != wallet:
-            return jsonify({'error': 'Signature does not match wallet'}), 401
-    except Exception as e:
-        return jsonify({'error': f'Signature error: {e}'}), 401
+        if admin_key and not is_admin_req:
+            return jsonify({'error': 'Invalid admin key'}), 401
 
-    for idx in idx_list:
-        if not _verify_orcavault_memory_owner(vault_id, idx, wallet):
-            return jsonify({'error': f'Not the memory creator or vault owner for item {idx}'}), 403
+        if vault_id is None or not idx_list or not all([wallet, signature, thumbnail]):
+            return jsonify({'error': 'Missing required fields'}), 400
+
+        items_str = ','.join(str(i) for i in idx_list)
+        if len(idx_list) == 1:
+            message = (
+                f"Set thumbnail for Lightchain Archives memory vault={vault_id} item={idx_list[0]}\n"
+                f"Wallet: {wallet}\nTimestamp: {timestamp}"
+            )
+        else:
+            message = (
+                f"Set thumbnail for Lightchain Archives memory vault={vault_id} items={items_str}\n"
+                f"Wallet: {wallet}\nTimestamp: {timestamp}"
+            )
+        try:
+            msg       = encode_defunct(text=message)
+            recovered = Account.recover_message(msg, signature=signature).lower()
+            if recovered != wallet:
+                return jsonify({'error': 'Signature does not match wallet'}), 401
+        except Exception as e:
+            return jsonify({'error': f'Signature error: {e}'}), 401
+
+        for idx in idx_list:
+            if not _verify_orcavault_memory_owner(vault_id, idx, wallet):
+                return jsonify({'error': f'Not the memory creator or vault owner for item {idx}'}), 403
 
     try:
         saved = []
