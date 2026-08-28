@@ -677,10 +677,11 @@ footer a{color:var(--gold);text-decoration:none}
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:28px">
       <div>
         <div class="section-title" style="margin-bottom:0">📂 My Archives</div>
-        <div style="font-size:18px;color:var(--muted);margin-top:6px">All archives you've created, stored permanently on Lightchain</div>
+        <div style="font-size:18px;color:var(--muted);margin-top:6px">Archives are folders. Memories (movies, docs, photos) live inside them.</div>
       </div>
       <div class="nav-spacer"></div>
-      <button class="btn btn-gold" onclick="showScreen('create')">+ New Archive</button>
+      <button class="btn btn-outline" onclick="showScreen('create')">+ New Archive</button>
+      <button class="btn btn-gold" onclick="goAddMemoryFromArchives()">+ Add Memory</button>
     </div>
     <div id="my-archives-content">
       <div class="empty-state">
@@ -983,9 +984,10 @@ footer a{color:var(--gold);text-decoration:none}
 
     <!-- 🔓 Unlock relay (shown when wallet connected but not yet a relay member) -->
     <div id="relay-unlock-section" style="display:none;margin-top:8px;background:rgba(232,184,75,0.06);border:1.5px solid rgba(232,184,75,0.25);border-radius:14px;padding:18px 20px">
-      <div style="font-size:19px;font-weight:700;color:var(--gold);margin-bottom:6px">⚡ Tired of tapping Confirm 30+ times?</div>
-      <div style="font-size:17px;color:var(--text);margin-bottom:12px">Pay <strong><span id="relay-fee-display">2</span> LCAI once</strong> to unlock one-click uploads forever. No more wallet popups — the relay handles every transaction for you.</div>
-      <button class="btn btn-outline" onclick="showRelayUnlockModal()" style="font-size:17px;padding:11px 22px">Unlock One-Click Uploads →</button>
+      <div style="font-size:19px;font-weight:700;color:var(--gold);margin-bottom:6px">⚡ One payment. Upload forever.</div>
+      <div style="font-size:17px;color:var(--text);margin-bottom:8px">Pay <strong><span id="relay-fee-display">2</span> LCAI once</strong> — then every upload is one click. Not a charge per file.</div>
+      <div id="relay-unlock-inline-hint" style="font-size:15px;color:var(--muted);margin-bottom:12px;line-height:1.5"></div>
+      <button class="btn btn-gold" onclick="showRelayUnlockModal()" style="font-size:17px;padding:11px 22px">⚡ Unlock One-Click Uploads</button>
     </div>
 
     <div style="display:flex;gap:12px;margin-top:12px">
@@ -1093,21 +1095,32 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="modal-box" style="max-width:560px">
     <div style="font-size:48px;margin-bottom:12px;text-align:center">⚡</div>
     <div class="modal-title">Unlock One-Click Uploads</div>
-    <div class="modal-sub">One payment. One-click uploads forever — no more wallet confirmations on every file.</div>
-    <div style="background:rgba(232,184,75,0.08);border:1.5px solid var(--gold);border-radius:14px;padding:20px;margin:16px 0;font-size:18px;line-height:2">
-      <div style="color:var(--muted);font-size:16px;margin-bottom:6px">Step 1 — Send <strong><span id="relay-unlock-fee-display">2</span> LCAI</strong> to this address in your Trust Wallet:</div>
-      <div id="relay-unlock-wallet-addr" style="font-family:monospace;font-size:15px;word-break:break-all;color:var(--gold);background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;user-select:all">loading...</div>
-      <button class="btn btn-sm btn-outline" onclick="navigator.clipboard.writeText(document.getElementById('relay-unlock-wallet-addr').textContent).then(()=>showToast('Address copied!'))" style="margin-top:10px;font-size:15px">📋 Copy Address</button>
-    </div>
-    <div style="background:rgba(255,255,255,0.04);border-radius:12px;padding:16px 18px;margin-bottom:16px;font-size:17px;color:var(--text);line-height:1.7">
-      <strong>Step 2</strong> — After sending, copy your transaction hash from Trust Wallet and paste it here:
-    </div>
-    <input class="form-input" id="relay-payment-txhash" placeholder="Paste transaction hash: 0x..." style="margin-bottom:16px;font-size:16px;font-family:monospace">
-    <div style="font-size:15px;color:var(--muted);margin-bottom:18px">The server will verify your payment on-chain and unlock your access instantly. You only need to do this once — ever.</div>
-    <div style="display:flex;gap:12px">
+    <div class="modal-sub"><strong>One payment. Upload forever.</strong> Pay a one-time <span id="relay-unlock-fee-display">2</span> LCAI and every future upload is one click — no wallet confirmations on any file, ever again.</div>
+    <div id="relay-unlock-hint" style="font-size:16px;color:var(--muted);margin:8px 0 16px;line-height:1.6"></div>
+    <button class="btn btn-gold" id="btn-relay-pay" onclick="payRelayUnlock()" style="width:100%;justify-content:center;min-height:58px;font-size:20px;margin-bottom:14px">⚡ Pay <span id="relay-pay-fee-label">2</span> LCAI to Unlock</button>
+    <div style="display:flex;gap:12px;margin-bottom:8px">
       <button class="btn btn-outline" onclick="document.getElementById('modal-relay-unlock').classList.add('hidden')" style="flex:1;justify-content:center">Cancel</button>
-      <button class="btn btn-gold" id="btn-relay-verify" onclick="submitRelayPayment()" style="flex:2;justify-content:center;font-size:18px">✅ I've Paid — Verify &amp; Unlock</button>
     </div>
+    <details style="margin-top:18px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:12px;padding:12px 16px">
+      <summary style="cursor:pointer;font-weight:700;color:var(--muted);font-size:16px">Paid another way? Paste your transaction hash</summary>
+      <div style="margin-top:14px">
+        <div style="color:var(--muted);font-size:15px;margin-bottom:8px">Send <strong><span id="relay-unlock-fee-manual">2</span> LCAI</strong> to:</div>
+        <div id="relay-unlock-wallet-addr" style="font-family:monospace;font-size:14px;word-break:break-all;color:var(--gold);background:rgba(0,0,0,0.2);padding:10px;border-radius:8px;user-select:all">loading...</div>
+        <button class="btn btn-sm btn-outline" onclick="navigator.clipboard.writeText(document.getElementById('relay-unlock-wallet-addr').textContent).then(()=>showToast('Address copied!'))" style="margin-top:8px;font-size:14px">📋 Copy Address</button>
+        <input class="form-input" id="relay-payment-txhash" placeholder="Paste transaction hash: 0x..." style="margin:14px 0 12px;font-size:15px;font-family:monospace">
+        <button class="btn btn-outline" id="btn-relay-verify" onclick="submitRelayPayment()" style="width:100%;justify-content:center">✅ I've Paid — Verify &amp; Unlock</button>
+      </div>
+    </details>
+  </div>
+</div>
+
+<!-- Archive picker for Add Memory when user has multiple folders -->
+<div id="modal-archive-picker" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:520px">
+    <div class="modal-title">Which archive?</div>
+    <div class="modal-sub">Pick the folder to add your memory into.</div>
+    <div id="archive-picker-list" style="display:flex;flex-direction:column;gap:10px;margin:18px 0"></div>
+    <button class="btn btn-outline" onclick="document.getElementById('modal-archive-picker').classList.add('hidden')" style="width:100%;justify-content:center">Cancel</button>
   </div>
 </div>
 
@@ -1417,7 +1430,7 @@ const streamPrewarm  = new Set();
 const UPLOAD_PIECE_SIZE = 16 * 1024 * 1024; // 16 MB wire pieces (LightTube-proven)
 const UPLOAD_PARALLEL   = 4;
 const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small stays on /api/relay-upload (MCP)
-const OV_BUILD = '20260828d'; // bump to bust browser cache after deploy
+const OV_BUILD = '20260828e'; // bump to bust browser cache after deploy
 (function ovCacheBust() {
   try {
     const k = 'ov_build';
@@ -1479,6 +1492,7 @@ const OV_ADMIN_WALLETS = [
 let isAdmin             = false;
 let hiddenMemories      = new Set();
 let hiddenVaults        = new Set(); // archive shells removed from My Archives
+let lastVisibleVaults   = []; // last My Archives render (for Add Memory routing)
 let permRemovedMemories = new Set();
 let bannedWallets       = new Set();
 let visibilityOverrides = {};   // { memoryIdx_str: { setter: wallet, visibility: 'public'|'private' } }
@@ -3008,6 +3022,96 @@ async function renderOfficePreview(mode, dataURI) {
 // ════════════════════════════════════════════════════════
 //  BLOCKCHAIN: ADD MEMORY
 // ════════════════════════════════════════════════════════
+
+function goAddMemoryFromArchives() {
+  if (!wallet) { showToast('Connect your wallet first', true); connectWallet(); return; }
+  const visible = lastVisibleVaults || [];
+  if (visible.length === 0) {
+    showToast('First create an archive (a folder) to hold your memory.');
+    showScreen('create');
+    return;
+  }
+  if (visible.length === 1) {
+    currentVaultId = visible[0].id;
+    Promise.resolve(loadAndShowVault(visible[0].id)).then(goAddMemory);
+    return;
+  }
+  showArchivePickerThen((vaultId) => {
+    currentVaultId = vaultId;
+    Promise.resolve(loadAndShowVault(vaultId)).then(goAddMemory);
+  });
+}
+
+function showArchivePickerThen(cb) {
+  const list = document.getElementById('archive-picker-list');
+  const modal = document.getElementById('modal-archive-picker');
+  if (!list || !modal) { showToast('Archive picker missing', true); return; }
+  list.innerHTML = '';
+  (lastVisibleVaults || []).forEach(v => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-outline';
+    btn.style.cssText = 'width:100%;justify-content:flex-start;text-align:left;min-height:52px';
+    btn.textContent = (v.emoji || '📁') + '  ' + (v.name || ('Archive #' + v.id));
+    btn.onclick = () => {
+      modal.classList.add('hidden');
+      cb(v.id);
+    };
+    list.appendChild(btn);
+  });
+  modal.classList.remove('hidden');
+}
+
+async function payRelayUnlock() {
+  const btn = document.getElementById('btn-relay-pay');
+  try {
+    if (!wallet) { showToast('Connect your wallet first', true); connectWallet(); return; }
+    const s = signer || (provider ? await provider.getSigner() : null);
+    if (!s) { showToast('Wallet not ready — reconnect and try again', true); return; }
+    if (!relayWalletAddr) { showToast('Relay address not loaded — try again in a moment', true); return; }
+    if (!provider) { showToast('Wallet provider missing — reconnect', true); return; }
+
+    const fee = relayFee || 2;
+    const bal = await provider.getBalance(wallet);
+    if (bal < ethers.parseEther(String(fee))) {
+      showToast(`You need at least ${fee} LCAI to unlock. Add LCAI to your wallet, then try again.`, true);
+      return;
+    }
+
+    if (btn) btn.disabled = true;
+    showLoading('Sending payment…', `Approve the ${fee} LCAI payment in your wallet.`);
+
+    const tx = await s.sendTransaction({
+      to: relayWalletAddr,
+      value: ethers.parseEther(String(fee))
+    });
+
+    showLoading('Confirming on-chain…', 'Waiting for the network to confirm your payment.');
+    await tx.wait();
+
+    const resp = await fetch(`${RELAY_URL}/api/register-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ walletAddress: wallet, txHash: tx.hash })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) throw new Error(data.error || 'Verification failed');
+
+    hideLoading();
+    relayAccess = true; relayTier = 'paid';
+    updateRelayUI();
+    document.getElementById('modal-relay-unlock').classList.add('hidden');
+    showToast('🎉 Unlocked forever! One-click uploads are on — no more confirmations.');
+  } catch (e) {
+    hideLoading();
+    if (btn) btn.disabled = false;
+    const msg = (e && (e.shortMessage || e.message)) || String(e);
+    if (/reject|denied|4001/i.test(msg)) showToast('Payment cancelled — the ⚡ Pay button is still here whenever you\'re ready.', true);
+    else showToast('Payment didn\'t go through: ' + msg + ' — try again.', true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function goAddMemory() {
   if (!wallet) { showToast('Please connect your wallet first', true); connectWallet(); return; }
   const link = document.getElementById('add-mem-vault-link');
@@ -3100,7 +3204,8 @@ async function loadMyArchives() {
       } catch(v2err) { console.warn('V2 vault read (non-fatal):', v2err); }
     }
     if (events.length === 0) {
-      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">No archives yet</div><div class="empty-state-sub">You haven't created any archives. Start your first one!</div><button class="btn btn-gold" onclick="showScreen('create')" style="margin-top:8px">+ Create Archive</button></div>`;
+      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">Archives are folders that hold your memories</div><div class="empty-state-sub">Create your first archive, then add a memory (movie, doc, photo) to it.</div><button class="btn btn-gold" onclick="showScreen('create')" style="margin-top:8px">+ Create Archive</button></div>`;
+      lastVisibleVaults = [];
       return;
     }
     // VaultCreated args: [0]=vaultId, [1]=owner, [2]=name, [3]=template, [4]=description, [5]=timestamp
@@ -3117,9 +3222,11 @@ async function loadMyArchives() {
     });
     const visibleVaults = vaultList.filter(v => !hiddenVaults.has(String(v.id)));
     if (visibleVaults.length === 0) {
-      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">No archives yet</div><div class="empty-state-sub">You haven't created any archives (or empty ones were removed). Start your first one!</div><button class="btn btn-gold" onclick="showScreen('create')" style="margin-top:8px">+ Create Archive</button></div>`;
+      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">Archives are folders that hold your memories</div><div class="empty-state-sub">Create your first archive, then add a memory to it. (Empty archives you removed stay hidden.)</div><button class="btn btn-gold" onclick="showScreen('create')" style="margin-top:8px">+ Create Archive</button></div>`;
+      lastVisibleVaults = [];
       return;
     }
+    lastVisibleVaults = visibleVaults.slice();
     let html = '<div class="vault-grid">';
     visibleVaults.forEach(v => {
       html += `<div class="vault-card" onclick="currentVaultId=${v.id};loadAndShowVault(${v.id})">
@@ -3131,7 +3238,9 @@ async function loadMyArchives() {
           <span>📅 ${new Date(v.ts*1000).toLocaleDateString()}</span>
           <span>🆔 Archive #${v.id}</span>
         </div>
-        <button class="btn btn-outline" style="width:100%;margin-top:12px;justify-content:center;font-size:15px;border-color:rgba(232,82,82,0.4);color:var(--red)"
+        <button class="btn btn-gold" style="width:100%;margin-top:12px;justify-content:center;font-size:15px"
+          onclick="event.stopPropagation();currentVaultId=${v.id};loadAndShowVault(${v.id}).then(goAddMemory)">+ Add Memory</button>
+        <button class="btn btn-outline" style="width:100%;margin-top:8px;justify-content:center;font-size:15px;border-color:rgba(232,82,82,0.4);color:var(--red)"
           onclick="event.stopPropagation();hideArchiveFromList(${v.id}, '${escHtml(v.name).replace(/'/g, "\\'")}')">🗑️ Remove from My Archives</button>
       </div>`;
     });
@@ -3606,6 +3715,7 @@ function updateRelayUI() {
   const uploadSection = document.getElementById('relay-upload-section');
   const unlockSection = document.getElementById('relay-unlock-section');
   if (!uploadSection || !unlockSection) return;
+  const inlineHint = document.getElementById('relay-unlock-inline-hint');
   if (relayAccess) {
     uploadSection.style.display = '';
     unlockSection.style.display = 'none';
@@ -3614,6 +3724,11 @@ function updateRelayUI() {
     unlockSection.style.display = '';
     const feeEl = document.getElementById('relay-fee-display');
     if (feeEl) feeEl.textContent = relayFee;
+    if (inlineHint) inlineHint.textContent = `One-time ${relayFee} LCAI — not per upload. You'll need that much in your wallet.`;
+  } else if (RELAY_URL && !wallet) {
+    uploadSection.style.display = 'none';
+    unlockSection.style.display = '';
+    if (inlineHint) inlineHint.textContent = 'Connect your wallet to unlock one-click uploads.';
   } else {
     uploadSection.style.display = 'none';
     unlockSection.style.display = 'none';
@@ -3977,10 +4092,28 @@ async function runRepairMemory() {
 }
 
 function showRelayUnlockModal() {
+  const fee = relayFee || 2;
   const walletEl = document.getElementById('relay-unlock-wallet-addr');
   const feeEl    = document.getElementById('relay-unlock-fee-display');
+  const feeMan   = document.getElementById('relay-unlock-fee-manual');
+  const payLbl   = document.getElementById('relay-pay-fee-label');
+  const hint     = document.getElementById('relay-unlock-hint');
+  const payBtn   = document.getElementById('btn-relay-pay');
   if (walletEl) walletEl.textContent = relayWalletAddr || 'Connect wallet first';
-  if (feeEl)    feeEl.textContent    = relayFee || '2';
+  if (feeEl)    feeEl.textContent    = fee;
+  if (feeMan)   feeMan.textContent   = fee;
+  if (payLbl)   payLbl.textContent   = fee;
+  if (!wallet) {
+    if (hint) hint.textContent = 'Connect your wallet first, then you can pay in one tap.';
+    if (payBtn) { payBtn.disabled = true; payBtn.textContent = '🔌 Connect wallet to pay'; payBtn.onclick = () => { document.getElementById('modal-relay-unlock').classList.add('hidden'); connectWallet(); }; }
+  } else {
+    if (hint) hint.textContent = `You'll need ${fee} LCAI in your connected wallet. One approval unlocks forever.`;
+    if (payBtn) {
+      payBtn.disabled = false;
+      payBtn.innerHTML = `⚡ Pay <span id="relay-pay-fee-label">${fee}</span> LCAI to Unlock`;
+      payBtn.onclick = payRelayUnlock;
+    }
+  }
   document.getElementById('modal-relay-unlock').classList.remove('hidden');
 }
 
