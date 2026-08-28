@@ -502,7 +502,7 @@ footer a{color:var(--gold);text-decoration:none}
 
 /* ── ADMIN 3-LEVEL MOD ── */
 .admin-mod-wrap{position:relative;display:inline-block;z-index:5}
-.admin-mod-menu{position:absolute;left:0;top:100%;margin-top:4px;bottom:auto;right:auto;background:var(--bg2);border:1.5px solid rgba(232,82,82,0.5);border-radius:10px;overflow:visible;z-index:900;min-width:200px;max-width:min(280px,calc(100vw - 24px));box-shadow:0 8px 28px rgba(0,0,0,0.55)}
+.admin-mod-menu{position:fixed;margin:0;background:var(--bg2);border:1.5px solid rgba(232,82,82,0.5);border-radius:10px;overflow:visible;z-index:2000;min-width:200px;max-width:min(280px,calc(100vw - 24px));box-shadow:0 8px 28px rgba(0,0,0,0.55)}
 .admin-mod-menu.open-left{left:auto;right:0}
 .admin-mod-menu.hidden{display:none}
 .admin-mod-item{display:block;width:100%;padding:12px 16px;border:none;background:transparent;color:var(--text);font-size:16px;font-weight:700;cursor:pointer;text-align:left;font-family:inherit;transition:background .12s;white-space:nowrap}
@@ -1449,7 +1449,7 @@ const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small
 const ERC8004_REPUTATION_REGISTRY = '0x62e7E1502Ef822FBfb66554f072b46DF8A8c08D0';
 const ERC8004_AGENT_ID = 1;
 const ERC8004_AGENT_OWNER = '0xBF78164b6626ea8096C4B6b268b0b70f86f66893';
-const OV_BUILD = '20260828f'; // bump to bust browser cache after deploy
+const OV_BUILD = '20260828g'; // bump to bust browser cache after deploy
 (function ovCacheBust() {
   try {
     const k = 'ov_build';
@@ -1810,12 +1810,20 @@ function ovAdminMenu(menuId) {
   if (!menu) return;
   menu.classList.toggle('hidden');
   if (!menu.classList.contains('hidden')) {
-    menu.classList.remove('open-left');
-    // Keep labels fully visible: if menu would clip off the right edge, open leftward
+    // Position as a fixed overlay anchored to the Mod button, so the menu
+    // escapes the .memory-card overflow:hidden that was clipping the options.
+    const btn = menu.parentElement.querySelector('.chain-link-btn');
     requestAnimationFrame(() => {
-      const rect = menu.getBoundingClientRect();
-      if (rect.right > window.innerWidth - 8) menu.classList.add('open-left');
-      if (rect.left < 8) menu.classList.remove('open-left');
+      const b = btn.getBoundingClientRect();
+      const mw = menu.offsetWidth, mh = menu.offsetHeight;
+      let left = b.left;
+      let top  = b.bottom + 4;
+      // flip left if it would run off the right edge
+      if (left + mw > window.innerWidth - 8) left = Math.max(8, b.right - mw);
+      // flip up if it would run off the bottom edge
+      if (top + mh > window.innerHeight - 8) top = Math.max(8, b.top - mh - 4);
+      menu.style.left = left + 'px';
+      menu.style.top  = top + 'px';
     });
   }
   setTimeout(() => {
