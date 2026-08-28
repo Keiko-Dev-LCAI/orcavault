@@ -1449,7 +1449,7 @@ const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small
 const ERC8004_REPUTATION_REGISTRY = '0x62e7E1502Ef822FBfb66554f072b46DF8A8c08D0';
 const ERC8004_AGENT_ID = 1;
 const ERC8004_AGENT_OWNER = '0xBF78164b6626ea8096C4B6b268b0b70f86f66893';
-const OV_BUILD = '20260828g'; // bump to bust browser cache after deploy
+const OV_BUILD = '20260828h'; // bump to bust browser cache after deploy
 (function ovCacheBust() {
   try {
     const k = 'ov_build';
@@ -2471,6 +2471,7 @@ function renderMemoriesGrid() {
     const shareUrl = `${location.origin}${location.pathname}?vault=${currentVaultId}&item=${m.idx}`;
     const isPerm   = permRemovedMemories.has(String(m.idx));
     const isBanned = m.addedBy && bannedWallets.has(m.addedBy.toLowerCase());
+    if (isPerm || isBanned) return; // perm-removed / banned: gone for everyone, incl. admin — never render
     const adminBtn = isAdmin ? ovAdminBtnHtml(m.idx, isHidden, isPerm) : '';
     const hiddenBadge = isAdmin && isHidden ? `<span class="chunked-badge" style="background:rgba(232,82,82,0.12);border-color:rgba(232,82,82,0.4);color:#e85252">🚫 Hidden</span>` : (isAdmin && isPerm ? `<span class="chunked-badge" style="background:rgba(232,82,82,0.2);border-color:#e85252;color:#e85252">❌ Perm Removed</span>` : '');
     const chainRow = `<div class="chain-link-row">
@@ -4956,10 +4957,12 @@ async function loadPublicBrowse() {
     const publicMems = allMems.filter(m => {
       const parsed = parseCaption(m.caption);
       if (parsed.isPrivate) return false;              // private is never shown publicly, even to admins
-      if (isAdmin) return true;                         // admins keep hidden/perm/banned items on Browse so they can moderate + restore
+      // Perm-remove / ban: gone for EVERYONE including admin (Keiko: don't keep seeing removed content)
       if (permRemovedMemories.has(String(m.idx))) return false;
-      if (hiddenMemories.has(String(m.idx))) return false;
       if (m.addedBy && bannedWallets.has(m.addedBy.toLowerCase())) return false;
+      // Temp hide: still recoverable for admins
+      if (isAdmin) return true;
+      if (hiddenMemories.has(String(m.idx))) return false;
       return true;
     });
 
@@ -4994,9 +4997,9 @@ function renderBrowseGrid(cat) {
     const isHidden = hiddenMemories.has(String(m.idx));
     if (isHidden && !isAdmin) return;
     const isPerm = permRemovedMemories.has(String(m.idx));
-    if (isPerm && !isAdmin) return;
+    if (isPerm) return; // perm-removed: gone for everyone, incl. admin — never render
     const isBanned = m.addedBy && bannedWallets.has(m.addedBy.toLowerCase());
-    if (isBanned && !isAdmin) return;
+    if (isBanned) return; // banned wallet: gone for everyone, incl. admin — never render
     const icon = typeIcons[m.memType] || '📎';
     const thumbHtml = buildMemoryThumbHtml(m);
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
