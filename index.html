@@ -1626,7 +1626,20 @@ async function connectWallet() {
   }
 }
 
-function disconnectWallet() {
+async function disconnectWallet() {
+  // Ask the wallet to actually FORGET this site (EIP-2255). Without this,
+  // "Disconnect" only clears our own state while the wallet stays silently
+  // connected — so reconnecting is a silent one-click and it feels like the
+  // buttons do nothing. Revoking eth_accounts forces a fresh approval prompt
+  // on the next Connect, making log-off real. Wallets that don't support
+  // revoke simply throw here — we ignore it and still clear our own state.
+  try {
+    const raw = detectProvider();
+    if (raw && raw.request) {
+      await raw.request({ method: 'wallet_revokePermissions', params: [{ eth_accounts: {} }] });
+    }
+  } catch (e) { /* revoke unsupported or user-dismissed — proceed with local clear */ }
+
   wallet = null; provider = null; signer = null; contract = null; contractV2 = null; contractV3 = null;
   if (_wcProv) { try { _wcProv.disconnect(); } catch {} _wcProv = null; }
   relayAccess = false; relayTier = 'none'; relayFee = null; relayWalletAddr = '';
@@ -1639,6 +1652,7 @@ function disconnectWallet() {
   const bds = document.getElementById('btn-disconnect-sidebar'); if (bds) bds.style.display = 'none';
   updateRelayUI();
   showScreen('landing');
+  showToast('Logged off');
 }
 
 function updateNavWallet() {
