@@ -2260,18 +2260,20 @@ function buildMemoryThumbHtml(m, opts = {}) {
   const isOwnerCard = opts.isOwnerCard === true;
   const savedThumb = getSavedThumbForMemory(m);
   const urlCandidates = getThumbUrlCandidates(vaultId, idx, m.title);
-  const adminThumbBtn = (isAdmin && !isOwnerCard)
+  const adminThumbBtn = isAdmin
     ? `<button onclick="event.stopPropagation();setAdminThumbnail(${vaultId},${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(232,184,75,0.9);border:1px solid var(--gold);color:#1a1a1a;font-size:14px;font-weight:700;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">🛡️ Set thumbnail</button>`
     : '';
 
   if (savedThumb) {
-    return ovThumbImgHtml(vaultId, idx, m.title, savedThumb);
+    const img = ovThumbImgHtml(vaultId, idx, m.title, savedThumb);
+    return adminThumbBtn ? `<div style="position:relative">${img}${adminThumbBtn}</div>` : img;
   }
   if (urlCandidates.length) {
     const primary = urlCandidates[0];
     const fallbacks = urlCandidates.slice(1);
     const fbAttr = fallbacks.length ? ` data-fb="${escHtml(fallbacks.join('|'))}"` : '';
-    return `<img class="memory-thumb" src="${escHtml(primary)}" alt="${escHtml(m.title || '')}" loading="lazy"${fbAttr} onerror="ovThumbImgError(this)">`;
+    const img = `<img class="memory-thumb" src="${escHtml(primary)}" alt="${escHtml(m.title || '')}" loading="lazy"${fbAttr} onerror="ovThumbImgError(this)">`;
+    return adminThumbBtn ? `<div style="position:relative">${img}${adminThumbBtn}</div>` : img;
   }
   if (m.memType === 'photo' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:image')) {
     return ovThumbImgHtml(vaultId, idx, m.title, m.dataURI);
