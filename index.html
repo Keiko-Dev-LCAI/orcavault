@@ -1016,6 +1016,7 @@ footer a{color:var(--gold);text-decoration:none}
         <button class="btn btn-sm btn-outline" id="btn-disconnect-sidebar" style="width:100%;justify-content:center;margin-bottom:10px;display:none" onclick="disconnectWallet()">🔌 Disconnect Wallet</button>
         <div id="creator-delete-wrap" style="display:none">
           <button class="creator-delete-btn" onclick="creatorDeleteMemory()">🗑️ Delete My Memory</button>
+          <button class="btn btn-outline" id="btn-fix-chunks" onclick="openOvRepairFromViewer()" style="width:100%;justify-content:center;margin-top:10px;display:none;border-color:rgba(232,184,75,0.5);color:var(--gold)">🔧 Fix Missing Chunks</button>
           <p style="font-size:15px;color:var(--muted);margin-top:8px;line-height:1.5">Only you can delete your own memories. The blockchain record remains but it will be removed from this archive.</p>
         </div>
         <div id="report-memory-wrap">
@@ -1106,6 +1107,37 @@ footer a{color:var(--gold);text-decoration:none}
   </div>
 </div>
 
+<!-- ── ORCAVAULT REPAIR MODAL (owner Fix Missing Chunks) ── -->
+<div id="ov-repair-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:600;overflow-y:auto;padding:20px">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;width:100%;max-width:620px;margin:auto;padding:32px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px">
+      <div style="font-size:24px;font-weight:800">🔧 Fix Missing Chunks</div>
+      <button onclick="closeOvRepairModal()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer">✕</button>
+    </div>
+    <p style="color:var(--muted);font-size:16px;line-height:1.65;margin-bottom:20px">
+      Pick the <strong>same original file</strong> you uploaded. The relay scans Lightchain and re-submits only the missing chunks. Keep this tab open until it finishes.
+    </p>
+    <div style="margin-bottom:16px;padding:14px 16px;background:rgba(232,184,75,0.1);border:1px solid rgba(232,184,75,0.35);border-radius:12px">
+      <div style="font-size:14px;color:var(--muted);margin-bottom:4px">Repairing</div>
+      <div style="font-size:20px;font-weight:800;color:var(--gold)" id="ov-repair-title">—</div>
+      <div style="font-size:14px;color:var(--muted);margin-top:6px" id="ov-repair-id-label">Memory ID —</div>
+    </div>
+    <div class="form-group" style="margin-bottom:24px">
+      <label class="form-label">Original file</label>
+      <div class="drop-zone" onclick="document.getElementById('ov-repair-file-input').click()" style="cursor:pointer">
+        <div class="drop-zone-icon">📄</div>
+        <div class="drop-zone-text" id="ov-repair-drop-text">Click to pick the original file</div>
+      </div>
+      <input type="file" id="ov-repair-file-input" style="display:none" onchange="handleOvRepairFileSelect(this)">
+    </div>
+    <div style="display:flex;gap:12px">
+      <button class="btn btn-outline" onclick="closeOvRepairModal()" style="flex:1">Cancel</button>
+      <button class="btn btn-gold" onclick="runRepairMemory()" id="ov-repair-run-btn" style="flex:2">🔧 Upload Missing Chunks</button>
+    </div>
+    <div id="ov-repair-status-msg" style="margin-top:16px;font-size:15px;color:var(--muted);text-align:center;min-height:22px"></div>
+  </div>
+</div>
+
 <!-- ── CHUNK UPLOAD PROGRESS OVERLAY ── -->
 <div id="chunk-progress-overlay">
   <div style="font-size:52px">💡⛓️</div>
@@ -1114,7 +1146,7 @@ footer a{color:var(--gold);text-decoration:none}
   <div class="cp-bar-track"><div id="cp-bar"></div></div>
   <div style="font-size:18px;font-weight:700;color:var(--muted)" id="cp-pct">0%</div>
   <div class="cp-warning">⚠️ Do not close this tab — upload in progress</div>
-  <div style="font-size:18px;color:var(--muted);max-width:600px;line-height:1.65">Each chunk is a separate Lightchain transaction. Your wallet will prompt you for each one. This is normal — approve each one to continue.</div>
+  <div style="font-size:18px;color:var(--muted);max-width:600px;line-height:1.65" id="cp-hint">One signature authorizes the relay. Large files upload in parallel pieces, then the relay stores chunks on-chain — no per-chunk wallet taps.</div>
 </div>
 
 <!-- ── LOADING OVERLAY ── -->
@@ -1375,7 +1407,33 @@ let currentVaultData = null;
 let currentMemories  = [];
 let currentMemType   = null;
 let pendingFileDataURI = null;
+let pendingFile        = null;   // raw File for job-based large uploads (never commit contents)
 let lastShareUrl     = '';
+const streamPrewarm  = new Set();
+const UPLOAD_PIECE_SIZE = 16 * 1024 * 1024; // 16 MB wire pieces (LightTube-proven)
+const UPLOAD_PARALLEL   = 4;
+const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small stays on /api/relay-upload (MCP)
+
+/** Run async work over 0..n-1 with limited concurrency. */
+async function mapPool(n, concurrency, fn) {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, n) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= n) return;
+      await fn(i);
+    }
+  });
+  await Promise.all(workers);
+}
+
+function prewarmOvStream(ver, memoryId) {
+  const key = (ver || 'v3') + '-' + memoryId;
+  if (streamPrewarm.has(key) || chunkCache.has(key)) return;
+  streamPrewarm.add(key);
+  if (!RELAY_URL) return;
+  fetch(`${RELAY_URL}/api/media/stream/orcavault/${ver}/${memoryId}/status`).catch(() => {});
+}
 let vmVaultId        = null;
 let vmItemIdx        = null;
 let modalQRGenerated = false;
@@ -2808,6 +2866,15 @@ async function loadAndShowMemory(vaultId, idx) {
     if (deleteWrap) {
       const isOwner = wallet && mem.addedBy && wallet.toLowerCase() === mem.addedBy.toLowerCase();
       deleteWrap.style.display = isOwner ? '' : 'none';
+      const fixBtn = document.getElementById('btn-fix-chunks');
+      if (fixBtn) {
+        const canRepair = isOwner && mem._isChunked && idx >= 300000;
+        fixBtn.style.display = canRepair ? '' : 'none';
+      }
+    }
+    if (mem._isChunked && (mem.memType === 'video' || mem.memType === 'audio') && mem._memoryId != null) {
+      const ver = (mem._source === 'v3relay' || mem._contract === 'v3' || idx >= 300000) ? 'v3' : 'v2';
+      prewarmOvStream(ver, mem._memoryId);
     }
 
     // Share
@@ -2993,6 +3060,7 @@ function selectMemType(btn, type) {
   btn.classList.add('active');
   currentMemType = type;
   pendingFileDataURI = null;
+  pendingFile = null;
 
   const uploadWrap = document.getElementById('upload-zone-wrap');
   const textWrap   = document.getElementById('text-input-wrap');
@@ -3055,6 +3123,7 @@ function onFileSelect(e) {
 async function processFile(file) {
   const sizeWarn = document.getElementById('size-warning');
   const preview  = document.getElementById('file-preview');
+  pendingFile = file || null;
 
   if (currentMemType === 'photo') {
     showLoading('Compressing photo…', 'Resizing and optimizing for blockchain storage');
@@ -3076,16 +3145,16 @@ async function processFile(file) {
     const isAudio = currentMemType === 'audio';
 
     if (isVideo && file.size > MAX_VIDEO_BYTES) {
-      if (V2_CONTRACT_ADDRESS) {
-        // V2 is deployed — allow chunked upload; show estimate hint
+      if (V2_CONTRACT_ADDRESS || RELAY_URL) {
+        // V2 wallet-chunked or relay job upload can handle large video
         sizeWarn.innerHTML = getChunkHintHTML(file.size, 'video');
         sizeWarn.style.display = '';
         sizeWarn.style.color = '';
-        // Fall through to read the file
+        // Fall through
       } else {
-        // V2 not yet deployed — show ffmpeg helper dialog
         showVideoTooBigDialog(file.name, kb);
         pendingFileDataURI = null;
+        pendingFile = null;
         preview.style.display = 'none';
         return;
       }
@@ -3127,6 +3196,21 @@ async function processFile(file) {
     } else {
       sizeWarn.style.display = 'none';
     }
+    // Large media: keep the File for job upload; avoid loading the whole movie into a data URI.
+    if (file.size >= JOB_UPLOAD_MIN_BYTES && (isVideo || isAudio)) {
+      hideLoading();
+      const objUrl = URL.createObjectURL(file);
+      pendingFileDataURI = null; // job path uses pendingFile
+      const mb = (file.size / (1024 * 1024)).toFixed(1);
+      if (isVideo) {
+        preview.innerHTML = `<video src="${objUrl}" controls style="max-width:100%;border-radius:10px"></video><div style="font-size:13px;color:var(--muted);margin-top:8px">✅ Ready for one-click job upload: ${mb} MB</div>`;
+      } else {
+        preview.innerHTML = `<audio src="${objUrl}" controls style="width:100%"></audio><div style="font-size:13px;color:var(--muted);margin-top:8px">✅ Ready for one-click job upload: ${mb} MB</div>`;
+      }
+      preview.style.display = '';
+      return;
+    }
+
     showLoading('Reading file…', 'Converting to blockchain format');
     const dataURI = await fileToDataURI(file);
     pendingFileDataURI = dataURI;
@@ -3433,16 +3517,6 @@ async function doRelayUpload() {
   const title = (document.getElementById('mem-title')?.value || '').trim();
   if (!title) { showToast('Please enter a title', true); return; }
 
-  let dataURI = '';
-  const textContent = (document.getElementById('mem-text-content')?.value || '').trim();
-  if (currentMemType === 'text') {
-    if (!textContent) { showToast('Please enter text content', true); return; }
-    dataURI = 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(textContent)));
-  } else {
-    if (!pendingFileDataURI) { showToast('Please upload a file first', true); return; }
-    dataURI = pendingFileDataURI;
-  }
-
   if (!uploadWarningAccepted) { showUploadWarningModal(() => doRelayUpload()); return; }
   if (!termsAccepted) { showTermsModal(() => doRelayUpload()); return; }
 
@@ -3453,12 +3527,33 @@ async function doRelayUpload() {
   }
   const caption  = buildCaption(rawCaption);
   const tmplName = (currentVaultData && currentVaultData.template) ? currentVaultData.template : '';
-  const btn      = document.getElementById('btn-relay-upload');
+
+  // Large video/audio with a raw File → LightTube-style job upload (reliable for movies).
+  const useJob = pendingFile && (currentMemType === 'video' || currentMemType === 'audio')
+    && pendingFile.size >= JOB_UPLOAD_MIN_BYTES;
+  if (useJob) {
+    return doJobRelayUpload({
+      file: pendingFile,
+      title,
+      caption,
+      memType: currentMemType || 'video',
+      template: tmplName,
+    });
+  }
+
+  let dataURI = '';
+  const textContent = (document.getElementById('mem-text-content')?.value || '').trim();
+  if (currentMemType === 'text') {
+    if (!textContent) { showToast('Please enter text content', true); return; }
+    dataURI = 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(textContent)));
+  } else {
+    if (!pendingFileDataURI) { showToast('Please upload a file first', true); return; }
+    dataURI = pendingFileDataURI;
+  }
+
+  const btn = document.getElementById('btn-relay-upload');
   if (btn) btn.disabled = true;
 
-  // ── One off-chain signature authorizes the relay to store every chunk for you ──
-  // No gas, no per-chunk taps. The relay verifies this signature proves you own the
-  // wallet before it uploads anything on your behalf.
   const relayTimestamp = Date.now().toString();
   let relaySignature = '';
   try {
@@ -3496,7 +3591,6 @@ async function doRelayUpload() {
     if (btn) btn.disabled = false;
     resetAddMemoryForm();
     updateRecoveryPanels();
-    // Relay-stored (V3) memories are indexed at 300000 + memoryId in the viewer.
     const shareUrl = getMemoryURL(currentVaultId, 300000 + Number(data.memoryId));
     openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain — no wallet taps needed!', shareUrl, () => {
       loadAndShowVault(currentVaultId);
@@ -3505,6 +3599,269 @@ async function doRelayUpload() {
     hideLoading();
     if (btn) btn.disabled = false;
     showToast('Relay upload failed: ' + (e.message || e), true);
+  }
+}
+
+async function doJobRelayUpload({ file, title, caption, memType, template }) {
+  const btn = document.getElementById('btn-relay-upload');
+  if (btn) btn.disabled = true;
+  const overlay = document.getElementById('chunk-progress-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('cp-filename').textContent = title;
+  document.getElementById('cp-status').textContent = 'Sign once to authorize upload…';
+  document.getElementById('cp-bar').style.width = '0%';
+  document.getElementById('cp-pct').textContent = '0%';
+
+  try {
+    const relayTimestamp = Date.now().toString();
+    const s = signer || (provider ? await provider.getSigner() : null);
+    if (!s) throw new Error('No signer available');
+    const message = `OrcaVault one-click upload\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${relayTimestamp}`;
+    const signature = await s.signMessage(message);
+
+    document.getElementById('cp-status').textContent = 'Registering upload…';
+    const PIECE_SIZE = UPLOAD_PIECE_SIZE;
+    const totalPieces = Math.ceil(file.size / PIECE_SIZE);
+    const initRes = await fetch(`${RELAY_URL}/api/orcavault/upload-init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ownerAddress: wallet,
+        signature,
+        timestamp: relayTimestamp,
+        title,
+        caption: caption || '',
+        memType: memType || 'video',
+        template: template || '',
+        totalPieces,
+        pieceSize: PIECE_SIZE,
+        fileSize: file.size,
+        fileName: file.name || 'memory.bin',
+      }),
+    });
+    const initData = await initRes.json().catch(() => ({}));
+    if (!initRes.ok) {
+      if (initRes.status === 409 || initData.busy || initData.stuck) {
+        throw new Error(initData.error || 'Another upload is in progress on the relay — wait and try again.');
+      }
+      throw new Error(initData.error || 'Upload init failed');
+    }
+    const jobId = initData.jobId;
+
+    let piecesDone = 0;
+    await mapPool(totalPieces, UPLOAD_PARALLEL, async (i) => {
+      const start = i * PIECE_SIZE;
+      const end = Math.min(start + PIECE_SIZE, file.size);
+      const piece = file.slice(start, end);
+      const fd = new FormData();
+      fd.append('jobId', jobId);
+      fd.append('pieceIndex', String(i));
+      fd.append('totalPieces', String(totalPieces));
+      fd.append('piece', piece, 'piece');
+      const pieceRes = await fetch(`${RELAY_URL}/api/orcavault/upload-piece`, { method: 'POST', body: fd });
+      if (!pieceRes.ok) {
+        const err = await pieceRes.json().catch(() => ({}));
+        throw new Error(err.error || `Upload piece ${i} failed`);
+      }
+      piecesDone += 1;
+      const pct = Math.round((piecesDone / totalPieces) * 60);
+      document.getElementById('cp-bar').style.width = pct + '%';
+      document.getElementById('cp-pct').textContent = pct + '%';
+      const sentMB = Math.min(Math.round(piecesDone * PIECE_SIZE / 1024 / 1024), Math.round(file.size / 1024 / 1024));
+      const totalMB = Math.round(file.size / 1024 / 1024);
+      document.getElementById('cp-status').textContent = `Uploading ${sentMB} MB of ${totalMB} MB (${UPLOAD_PARALLEL}× parallel)…`;
+    });
+
+    document.getElementById('cp-status').textContent = 'Processing on blockchain…';
+    document.getElementById('cp-bar').style.width = '60%';
+    document.getElementById('cp-pct').textContent = '60%';
+
+    const completedJob = await new Promise((resolve, reject) => {
+      const poll = setInterval(async () => {
+        try {
+          const res = await fetch(`${RELAY_URL}/api/orcavault/upload-progress/${jobId}`);
+          const job = await res.json();
+          if (!res.ok || job.error === 'Job not found') {
+            clearInterval(poll);
+            reject(new Error('Server restarted mid-upload — please upload again'));
+            return;
+          }
+          let pct = 60;
+          if (job.status === 'initializing' || job.status === 'queued') pct = 63;
+          else if (job.total > 0) pct = 60 + Math.min(40, Math.round((job.progress / job.total) * 40));
+          document.getElementById('cp-bar').style.width = pct + '%';
+          document.getElementById('cp-pct').textContent = pct + '%';
+          if (job.status === 'initializing') {
+            document.getElementById('cp-status').textContent = 'Registering memory on chain…';
+          } else if (job.status === 'uploading') {
+            document.getElementById('cp-status').textContent = `On-chain: chunk ${job.progress} of ${job.total}…`;
+          } else if (job.status === 'complete') {
+            clearInterval(poll);
+            resolve(job);
+          } else if (job.status === 'error') {
+            clearInterval(poll);
+            reject(new Error(job.error || 'Upload failed'));
+          }
+        } catch (e) { /* keep polling through hiccups */ }
+      }, 3000);
+    });
+
+    overlay.style.display = 'none';
+    if (btn) btn.disabled = false;
+    resetAddMemoryForm();
+    updateRecoveryPanels();
+    const memoryId = completedJob.memoryId;
+    if (memoryId == null) {
+      showToast('Upload finished — refresh the archive to find your memory', false);
+      loadAndShowVault(currentVaultId);
+      return;
+    }
+    prewarmOvStream('v3', memoryId);
+    const shareUrl = getMemoryURL(currentVaultId, 300000 + Number(memoryId));
+    openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain — no wallet taps needed!', shareUrl, () => {
+      loadAndShowVault(currentVaultId);
+    });
+  } catch (err) {
+    overlay.style.display = 'none';
+    if (btn) btn.disabled = false;
+    showToast('Relay upload failed: ' + (err.message || err), true);
+  }
+}
+
+// ── Fix Missing Chunks (V3 relay memories) ───────────────────────────────────
+let _ovRepairMemoryId = null;
+let _ovRepairFile = null;
+
+function openOvRepairFromViewer() {
+  const mid = _currentViewMemIdx != null && _currentViewMemIdx >= 300000
+    ? (_currentViewMemIdx - 300000)
+    : null;
+  if (mid == null) { showToast('Repair is for relay (V3) chunked memories', true); return; }
+  openOvRepairModal(mid, _vmTitle || 'Memory');
+}
+
+function openOvRepairModal(memoryId, title) {
+  _ovRepairMemoryId = Number(memoryId);
+  _ovRepairFile = null;
+  document.getElementById('ov-repair-title').textContent = title || ('Memory #' + memoryId);
+  document.getElementById('ov-repair-id-label').textContent = 'Memory ID ' + memoryId + ' (V3)';
+  document.getElementById('ov-repair-drop-text').textContent = 'Click to pick the original file';
+  document.getElementById('ov-repair-status-msg').textContent = '';
+  document.getElementById('ov-repair-file-input').value = '';
+  document.getElementById('ov-repair-modal').style.display = 'block';
+}
+
+function closeOvRepairModal() {
+  document.getElementById('ov-repair-modal').style.display = 'none';
+  _ovRepairFile = null;
+}
+
+function handleOvRepairFileSelect(input) {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  _ovRepairFile = f;
+  document.getElementById('ov-repair-drop-text').textContent = f.name + ' (' + Math.round(f.size/1024/1024) + ' MB)';
+}
+
+async function runRepairMemory() {
+  if (!wallet) { showToast('Connect wallet first', true); return; }
+  if (_ovRepairMemoryId == null) { showToast('No memory selected', true); return; }
+  if (!_ovRepairFile) { showToast('Pick the original file first', true); return; }
+  if (!RELAY_URL) { showToast('Relay not configured', true); return; }
+
+  const file = _ovRepairFile;
+  const memoryId = _ovRepairMemoryId;
+  const runBtn = document.getElementById('ov-repair-run-btn');
+  if (runBtn) runBtn.disabled = true;
+  document.getElementById('ov-repair-status-msg').textContent = 'Sign to authorize repair…';
+
+  try {
+    const timestamp = Date.now().toString();
+    const s = signer || (provider ? await provider.getSigner() : null);
+    if (!s) throw new Error('No signer');
+    const message = `Repair OrcaVault memory\nMemory ID: ${memoryId}\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${timestamp}`;
+    const signature = await s.signMessage(message);
+
+    closeOvRepairModal();
+    const overlay = document.getElementById('chunk-progress-overlay');
+    overlay.style.display = 'flex';
+    document.getElementById('cp-filename').textContent = 'Repair memory #' + memoryId;
+    document.getElementById('cp-status').textContent = 'Starting repair…';
+    document.getElementById('cp-bar').style.width = '0%';
+    document.getElementById('cp-pct').textContent = '0%';
+
+    const PIECE_SIZE = UPLOAD_PIECE_SIZE;
+    const totalPieces = Math.ceil(file.size / PIECE_SIZE);
+    const fd = new FormData();
+    fd.append('repairMemoryId', String(memoryId));
+    fd.append('wallet', wallet.toLowerCase());
+    fd.append('signature', signature);
+    fd.append('timestamp', timestamp);
+    fd.append('totalPieces', String(totalPieces));
+    fd.append('pieceSize', String(PIECE_SIZE));
+    fd.append('fileSize', String(file.size));
+    fd.append('fileName', file.name || 'memory.bin');
+    if (_ovAdminKey) fd.append('adminKey', _ovAdminKey);
+
+    const initRes = await fetch(`${RELAY_URL}/api/orcavault/upload-init`, { method: 'POST', body: fd });
+    const initData = await initRes.json().catch(() => ({}));
+    if (!initRes.ok) throw new Error(initData.error || 'Repair init failed');
+    const jobId = initData.jobId;
+
+    if (!initData.cached) {
+      let piecesDone = 0;
+      await mapPool(totalPieces, UPLOAD_PARALLEL, async (i) => {
+        const start = i * PIECE_SIZE;
+        const end = Math.min(start + PIECE_SIZE, file.size);
+        const pfd = new FormData();
+        pfd.append('jobId', jobId);
+        pfd.append('pieceIndex', String(i));
+        pfd.append('totalPieces', String(totalPieces));
+        pfd.append('piece', file.slice(start, end), 'piece');
+        const pr = await fetch(`${RELAY_URL}/api/orcavault/upload-piece`, { method: 'POST', body: pfd });
+        if (!pr.ok) {
+          const err = await pr.json().catch(() => ({}));
+          throw new Error(err.error || 'Piece upload failed');
+        }
+        piecesDone += 1;
+        const pct = Math.round((piecesDone / totalPieces) * 40);
+        document.getElementById('cp-bar').style.width = pct + '%';
+        document.getElementById('cp-pct').textContent = pct + '%';
+        document.getElementById('cp-status').textContent = `Uploading file for repair… ${piecesDone}/${totalPieces}`;
+      });
+    }
+
+    document.getElementById('cp-status').textContent = 'Scanning chain & repairing…';
+    await new Promise((resolve, reject) => {
+      const poll = setInterval(async () => {
+        try {
+          const res = await fetch(`${RELAY_URL}/api/orcavault/upload-progress/${jobId}`);
+          const job = await res.json();
+          if (!res.ok) { clearInterval(poll); reject(new Error(job.error || 'Progress failed')); return; }
+          let pct = 40;
+          if (job.phase === 'scanning') pct = 45;
+          else if (job.phase === 'encoding') pct = 55;
+          else if (job.total > 0) pct = 60 + Math.min(40, Math.round((job.progress / job.total) * 40));
+          document.getElementById('cp-bar').style.width = pct + '%';
+          document.getElementById('cp-pct').textContent = pct + '%';
+          if (job.status === 'repairing' || job.status === 'uploading') {
+            document.getElementById('cp-status').textContent =
+              `Repairing ${job.progress || 0}/${job.total || '?'} missing chunks…`;
+          }
+          if (job.status === 'complete') { clearInterval(poll); resolve(job); }
+          else if (job.status === 'error') { clearInterval(poll); reject(new Error(job.error || 'Repair failed')); }
+        } catch (e) { /* keep polling */ }
+      }, 3000);
+    });
+
+    overlay.style.display = 'none';
+    prewarmOvStream('v3', memoryId);
+    showToast('Repair complete — missing chunks filled', false);
+  } catch (e) {
+    document.getElementById('chunk-progress-overlay').style.display = 'none';
+    showToast('Repair failed: ' + (e.message || e), true);
+  } finally {
+    if (runBtn) runBtn.disabled = false;
   }
 }
 
@@ -3557,6 +3914,7 @@ function resetAddMemoryForm() {
   document.getElementById('file-preview').style.display = 'none';
   document.getElementById('size-warning').style.display = 'none';
   pendingFileDataURI = null;
+  pendingFile = null;
   // Reset visibility to private (default — safest choice)
   setVisibility('private');
 }

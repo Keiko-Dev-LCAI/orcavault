@@ -76,6 +76,7 @@ LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
 ORCAVAULT_THUMBS_DIR     = os.environ.get("ORCAVAULT_THUMBS_DIR", "/data/ov_thumbs")
 LIGHTTUBE_REPAIR_CACHE_DIR = os.environ.get("LIGHTTUBE_REPAIR_CACHE_DIR", "/data/lt_repair_cache")
+OV_REPAIR_CACHE_DIR        = os.environ.get("OV_REPAIR_CACHE_DIR", "/data/ov_repair_cache")
 LT_STREAM_CACHE_DIR      = os.environ.get("LT_STREAM_CACHE_DIR", "/data/lt_stream_cache")
 OV_STREAM_CACHE_DIR      = os.environ.get("OV_STREAM_CACHE_DIR", "/data/ov_stream_cache")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
@@ -150,6 +151,9 @@ LIGHTTUBE_V2_ABI = [
 
 # In-memory upload job tracker  {jobId: {status, progress, total, videoId, error}}
 lt_upload_jobs = {}
+# OrcaVault job tracker — separate from LightTube (never write into lt_upload_jobs)
+# {jobId: {status, progress, total, memoryId, error, phase, ...}}
+ov_upload_jobs = {}
 
 def current_fee_lcai(relay_balance: float) -> float:
     """
@@ -392,6 +396,24 @@ def _mime_for_filename(fn):
         return 'video/webm'
     if fn.endswith('.gif'):
         return 'image/gif'
+    if fn.endswith('.jpg') or fn.endswith('.jpeg'):
+        return 'image/jpeg'
+    if fn.endswith('.png'):
+        return 'image/png'
+    if fn.endswith('.webp'):
+        return 'image/webp'
+    if fn.endswith('.mp3'):
+        return 'audio/mpeg'
+    if fn.endswith('.wav'):
+        return 'audio/wav'
+    if fn.endswith('.m4a'):
+        return 'audio/mp4'
+    if fn.endswith('.ogg'):
+        return 'audio/ogg'
+    if fn.endswith('.pdf'):
+        return 'application/pdf'
+    if fn.endswith('.txt'):
+        return 'text/plain'
     return 'video/mp4'
 
 
@@ -427,6 +449,11 @@ def _repair_cache_path(video_id, file_size):
     return os.path.join(LIGHTTUBE_REPAIR_CACHE_DIR, f'v3_{video_id}_{file_size}.tmp')
 
 
+def _ov_repair_cache_path(memory_id, file_size):
+    os.makedirs(OV_REPAIR_CACHE_DIR, exist_ok=True)
+    return os.path.join(OV_REPAIR_CACHE_DIR, f'v3_{memory_id}_{file_size}.tmp')
+
+
 def _prune_stale_lt_jobs():
     """Mark long-idle in-memory jobs as cancelled so a new repair can start."""
     now = time.time()
@@ -454,6 +481,36 @@ def _active_lt_job():
 
 
 _ACTIVE_SONG_JOB_STATUSES = frozenset({'queued', 'initializing', 'uploading'})
+_ACTIVE_OV_JOB_STATUSES   = frozenset({
+    'receiving', 'initializing', 'repairing', 'uploading', 'pending', 'queued'
+})
+_OV_JOB_STALE_SECS = int(os.environ.get('OV_JOB_STALE_SECS', str(_LT_JOB_STALE_SECS)))
+
+
+def _prune_stale_ov_jobs():
+    """Mark long-idle OrcaVault jobs as cancelled so a new upload/repair can start."""
+    now = time.time()
+    pruned = 0
+    for job_id, job in list(ov_upload_jobs.items()):
+        if job.get('status') not in _ACTIVE_OV_JOB_STATUSES:
+            continue
+        started = job.get('started_at', 0)
+        if started and (now - started) < _OV_JOB_STALE_SECS:
+            continue
+        job['status'] = 'error'
+        job['error']  = 'Job cancelled (stale — relay cleared lock so you can retry)'
+        pruned += 1
+        print(f"[ov-relay] pruned stale job {job_id} (status was {job.get('status')})")
+    return pruned
+
+
+def _active_ov_job():
+    """Return an in-flight OrcaVault upload/repair job, if any."""
+    _prune_stale_ov_jobs()
+    for job in ov_upload_jobs.values():
+        if job.get('status') in _ACTIVE_OV_JOB_STATUSES:
+            return job
+    return None
 
 
 def _active_song_job():
@@ -465,8 +522,12 @@ def _active_song_job():
 
 
 def _relay_blockchain_busy():
-    """True when any LightTube or LightTunes job is using the relay wallet."""
-    return _active_lt_job() is not None or _active_song_job() is not None
+    """True when any LightTube, LightTunes, or OrcaVault job is using the relay wallet."""
+    return (
+        _active_lt_job() is not None
+        or _active_song_job() is not None
+        or _active_ov_job() is not None
+    )
 
 
 def _relay_busy_error():
@@ -2584,6 +2645,640 @@ def register_payment():
         'message': f"Relay access unlocked for {wallet_address}",
         'tier':    'paid',
     })
+
+
+# ─── OrcaVault job-based upload + repair (separate from LightTube) ────────────
+
+def _scan_ov_chunk_indices(w3_conn, contract_address, memory_id):
+    """
+    Return the set of chunk indices already stored on-chain for an OrcaVault memory.
+    Event: ChunkStored(uint256 indexed memoryId, uint256 indexed chunkIndex, uint256, string)
+    """
+    addr           = Web3.to_checksum_address(contract_address)
+    event_topic    = '0x' + w3_conn.keccak(text='ChunkStored(uint256,uint256,uint256,string)').hex()
+    memory_topic   = '0x' + hex(memory_id)[2:].zfill(64)
+    latest_block   = w3_conn.eth.block_number
+    present_set    = set()
+    MIN_SPAN       = 100
+    DENSE_LIMIT    = 800
+
+    def _scan_range(start, end, depth=0):
+        if start > end:
+            return
+        span = end - start + 1
+        try:
+            logs = w3_conn.eth.get_logs({
+                'fromBlock': start,
+                'toBlock':   end,
+                'address':   addr,
+                'topics':    [event_topic, memory_topic],
+            })
+            for log in logs:
+                present_set.add(int(log['topics'][2].hex(), 16))
+            if len(logs) >= DENSE_LIMIT and span > MIN_SPAN:
+                mid = start + span // 2
+                print(f"[ov-repair] scan blocks {start}-{end}: {len(logs)} logs — subdividing at {mid}")
+                _scan_range(start, mid, depth + 1)
+                _scan_range(mid + 1, end, depth + 1)
+        except Exception as err:
+            if span <= MIN_SPAN:
+                print(f"[ov-repair] scan blocks {start}-{end} failed at min span: {err}")
+                return
+            mid = start + span // 2
+            print(f"[ov-repair] scan blocks {start}-{end} failed ({err}) — splitting at {mid}")
+            _scan_range(start, mid, depth + 1)
+            _scan_range(mid + 1, end, depth + 1)
+
+    SCAN_STEP = 50_000
+    total_pages = (latest_block // SCAN_STEP) + 1
+    page_num = 0
+    print(f"[ov-repair] memory {memory_id}: adaptive scan 0-{latest_block:,} ({total_pages} top-level pages)")
+    for start in range(0, latest_block + 1, SCAN_STEP):
+        end = min(start + SCAN_STEP - 1, latest_block)
+        page_num += 1
+        _scan_range(start, end)
+        if page_num % 5 == 0 or end >= latest_block:
+            print(f"[ov-repair] scan page {page_num}/{total_pages} done — {len(present_set)} unique chunks so far")
+    return present_set
+
+
+def _estimate_ov_chunk_gas(w3_conn, contract, memory_id, chunk_index, chunk_data, from_address):
+    """Estimate gas for one OrcaVault addChunkRelay; fall back to default."""
+    try:
+        built = contract.functions.addChunkRelay(
+            memory_id, chunk_index, chunk_data
+        ).build_transaction({
+            'from': from_address,
+            'nonce': w3_conn.eth.get_transaction_count(from_address, 'latest'),
+            'gas': LT_CHUNK_GAS_DEFAULT,
+            'gasPrice': w3_conn.eth.gas_price,
+            'chainId': CHAIN_ID,
+        })
+        est = w3_conn.eth.estimate_gas(built)
+        return min(int(est * 1.25) + 50_000, LT_CHUNK_GAS_DEFAULT)
+    except Exception:
+        return LT_CHUNK_GAS_DEFAULT
+
+
+def _send_one_ov_chunk_tx(memory_id, chunk_index, chunk_data, nonce, gas_price, contract_address, receipt_timeout=900):
+    """Send a single addChunkRelay transaction. Borrows a pooled Web3 connection."""
+    w3t = _borrow_w3()
+    try:
+        ct         = w3t.eth.contract(address=Web3.to_checksum_address(contract_address), abi=V3_ABI)
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        gas_limit  = _estimate_ov_chunk_gas(
+            w3t, ct, memory_id, chunk_index, chunk_data, relay_acct.address
+        )
+        gas_price  = _cap_gas_price(gas_limit, gas_price)
+        tx = ct.functions.addChunkRelay(memory_id, chunk_index, chunk_data).build_transaction({
+            'from':     relay_acct.address,
+            'nonce':    nonce,
+            'gas':      gas_limit,
+            'gasPrice': gas_price,
+            'chainId':  CHAIN_ID,
+        })
+        signed  = relay_acct.sign_transaction(tx)
+        tx_hash = w3t.eth.send_raw_transaction(signed.raw_transaction)
+        return _wait_tx_receipt(w3t, tx_hash, timeout=receipt_timeout)
+    finally:
+        _return_w3(w3t)
+
+
+def _parse_memory_id_from_receipt(w3_conn, receipt):
+    """Extract memoryId from MemoryCreated event topics in an initMemoryRelay receipt."""
+    MEMORY_CREATED_TOPIC = w3_conn.keccak(
+        text="MemoryCreated(uint256,address,string,string,string,uint256,string,uint256)"
+    ).hex()
+    for log in receipt.logs:
+        if len(log.topics) > 0 and log.topics[0].hex() == MEMORY_CREATED_TOPIC:
+            return int(log.topics[1].hex(), 16)
+    return None
+
+
+@app.route('/api/orcavault/upload-init', methods=['POST'])
+def orcavault_upload_init():
+    """
+    Initialize a chunked OrcaVault upload (or repair) session.
+    Accepts JSON or multipart. Fields: ownerAddress|wallet, title, caption, memType,
+    template, totalPieces, pieceSize, fileSize, fileName, signature, timestamp,
+    and for repair: repairMemoryId (+ optional adminKey).
+    """
+    if not RELAY_PRIVATE_KEY or not V3_CONTRACT_ADDRESS:
+        return jsonify({'error': 'Relay not configured'}), 500
+
+    data = request.get_json(force=True, silent=True) or {}
+    form = request.form
+
+    def _field(key, default=''):
+        v = form.get(key) or data.get(key) or default
+        return (v if isinstance(v, str) else str(v or default)).strip()
+
+    owner        = (_field('ownerAddress') or _field('wallet')).lower()
+    signature    = _field('signature')
+    title        = _field('title') or 'Untitled'
+    caption      = _field('caption')
+    mem_type     = _field('memType', 'video') or 'video'
+    template     = _field('template')
+    timestamp    = _field('timestamp')
+    total_pieces = int(form.get('totalPieces', data.get('totalPieces', 0)) or 0)
+    file_name    = _field('fileName', 'memory.bin') or 'memory.bin'
+    repair_memory_id_str = _field('repairMemoryId')
+    repair_memory_id = int(repair_memory_id_str) if repair_memory_id_str else None
+
+    if repair_memory_id is not None:
+        admin_key = _field('adminKey')
+        is_admin_repair = (
+            LIGHTTUBE_ADMIN_KEY
+            and admin_key
+            and admin_key == LIGHTTUBE_ADMIN_KEY
+        )
+        if is_admin_repair:
+            pass
+        else:
+            if not owner or not signature or not timestamp:
+                return jsonify({'error': 'Connect wallet and sign to repair your memory'}), 401
+            message = (
+                f"Repair OrcaVault memory\nMemory ID: {repair_memory_id}\n"
+                f"Wallet: {owner}\nTimestamp: {timestamp}"
+            )
+            try:
+                msg       = encode_defunct(text=message)
+                recovered = Account.recover_message(msg, signature=signature).lower()
+                if recovered != owner:
+                    return jsonify({'error': 'Signature does not match wallet'}), 401
+            except Exception as e:
+                return jsonify({'error': f'Signature error: {e}'}), 401
+            if not _verify_orcavault_memory_owner(0, 300000 + repair_memory_id, owner):
+                return jsonify({'error': 'Wallet is not the on-chain owner of this memory'}), 403
+        if not total_pieces:
+            return jsonify({'error': 'totalPieces required'}), 400
+        _prune_stale_ov_jobs()
+        if _active_ov_job():
+            return jsonify({
+                'error': 'Another OrcaVault upload/repair is already running on the relay. '
+                         'Wait for it to finish and try again.',
+                'stuck': True,
+            }), 409
+        if _active_lt_job() is not None or _active_song_job() is not None:
+            return _relay_busy_error()
+    else:
+        if not owner or not signature or not total_pieces:
+            return jsonify({'error': 'Missing required fields'}), 400
+        if not timestamp:
+            return jsonify({'error': 'Missing signature — reconnect your wallet and try the upload again'}), 401
+        message = (
+            "OrcaVault one-click upload\n"
+            f"Wallet: {owner}\n"
+            f"Timestamp: {timestamp}"
+        )
+        try:
+            msg       = encode_defunct(text=message)
+            recovered = Account.recover_message(msg, signature=signature).lower()
+            if recovered != owner:
+                return jsonify({'error': 'Signature does not match wallet'}), 401
+        except Exception as e:
+            return jsonify({'error': f'Signature error: {e}'}), 401
+
+        if not has_relay_access(owner):
+            relay        = get_relay_account()
+            balance_lcai = float(w3.from_wei(w3.eth.get_balance(relay.address), 'ether'))
+            fee          = current_fee_lcai(balance_lcai)
+            return jsonify({
+                'error':        'No relay access',
+                'message':      f"Send {fee} LCAI to {relay.address} to unlock one-click uploads, then call /api/register-payment",
+                'relay_wallet': relay.address,
+                'fee_lcai':     fee,
+                'paused':       fee is None,
+            }), 403
+
+        if _relay_blockchain_busy():
+            return _relay_busy_error()
+
+    file_size  = int(form.get('fileSize', data.get('fileSize', 0)) or 0)
+    piece_size = int(form.get('pieceSize', data.get('pieceSize', 0)) or 0)
+    if piece_size <= 0 and total_pieces > 0 and file_size > 0:
+        piece_size = (file_size + total_pieces - 1) // total_pieces
+    job_id = str(uuid.uuid4())
+
+    if repair_memory_id is not None and file_size > 0:
+        cache_path = _ov_repair_cache_path(repair_memory_id, file_size)
+        if os.path.isfile(cache_path) and os.path.getsize(cache_path) == file_size:
+            ov_upload_jobs[job_id] = {
+                'status':            'initializing',
+                'progress':          0,
+                'total':             0,
+                'memoryId':          None,
+                'error':             None,
+                'pieces_received':   total_pieces,
+                'total_pieces':      total_pieces,
+                'tmp_path':          cache_path,
+                'wallet':            owner,
+                'title':             title,
+                'caption':           caption,
+                'mem_type':          mem_type,
+                'template':          template,
+                'file_name':         file_name,
+                'repair_memory_id':  repair_memory_id,
+                'from_cache':        True,
+                'started_at':        time.time(),
+            }
+            t = threading.Thread(target=_process_ov_chunked_upload, args=(job_id,), daemon=True)
+            t.start()
+            print(f"[ov-repair] job {job_id}: using cached file for memory {repair_memory_id} ({file_size} bytes)")
+            return jsonify({'jobId': job_id, 'cached': True})
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.tmp')
+    if file_size > 0:
+        try:
+            tmp.truncate(file_size)
+        except Exception:
+            pass
+    tmp.close()
+
+    ov_upload_jobs[job_id] = {
+        'status':            'receiving',
+        'progress':          0,
+        'total':             0,
+        'memoryId':          None,
+        'error':             None,
+        'pieces_received':   0,
+        'pieces_got':        set(),
+        'total_pieces':      total_pieces,
+        'piece_size':        piece_size,
+        'tmp_path':          tmp.name,
+        'wallet':            owner,
+        'title':             title,
+        'caption':           caption,
+        'mem_type':          mem_type,
+        'template':          template,
+        'file_name':         file_name,
+        'repair_memory_id':  repair_memory_id,
+        'file_size':         file_size,
+        'started_at':        time.time(),
+    }
+    return jsonify({'jobId': job_id})
+
+
+@app.route('/api/orcavault/upload-piece', methods=['POST'])
+def orcavault_upload_piece():
+    """
+    Write one binary piece into an OrcaVault chunked upload session.
+    Form fields: jobId, pieceIndex, piece (file/blob)
+    """
+    job_id     = request.form.get('jobId', '').strip()
+    piece_file = request.files.get('piece')
+    try:
+        piece_index = int(request.form.get('pieceIndex', -1))
+    except (TypeError, ValueError):
+        piece_index = -1
+
+    if not job_id or not piece_file:
+        return jsonify({'error': 'Missing jobId or piece'}), 400
+
+    job = ov_upload_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    if job['status'] != 'receiving':
+        return jsonify({'error': 'Job not in receiving state'}), 400
+
+    data = piece_file.read()
+    if not data:
+        return jsonify({'error': 'Empty piece'}), 400
+
+    lock = _job_piece_lock(job_id)
+    with lock:
+        got = job.setdefault('pieces_got', set())
+        if piece_index in got:
+            return jsonify({'ok': True, 'piecesReceived': len(got), 'duplicate': True})
+
+        piece_size = int(job.get('piece_size') or 0)
+        if piece_index >= 0 and piece_size > 0:
+            with open(job['tmp_path'], 'r+b') as f:
+                f.seek(piece_index * piece_size)
+                f.write(data)
+        elif piece_index >= 0 and job.get('file_size'):
+            tp = max(int(job.get('total_pieces') or 1), 1)
+            ps = (int(job['file_size']) + tp - 1) // tp
+            job['piece_size'] = ps
+            with open(job['tmp_path'], 'r+b') as f:
+                f.seek(piece_index * ps)
+                f.write(data)
+        else:
+            with open(job['tmp_path'], 'ab') as f:
+                f.write(data)
+
+        got.add(piece_index if piece_index >= 0 else len(got))
+        job['pieces_received'] = len(got)
+        pieces_received = job['pieces_received']
+        done = pieces_received >= job['total_pieces']
+
+        if done:
+            repair_mid = job.get('repair_memory_id')
+            if repair_mid is not None and not job.get('from_cache'):
+                try:
+                    fsize     = os.path.getsize(job['tmp_path'])
+                    cache_dst = _ov_repair_cache_path(repair_mid, fsize)
+                    shutil.copy2(job['tmp_path'], cache_dst)
+                    print(f"[ov-repair] cached memory {repair_mid} file ({fsize} bytes) → {cache_dst}")
+                except Exception as err:
+                    print(f"[ov-repair] cache save failed: {err}")
+            job['status'] = 'initializing'
+            t = threading.Thread(target=_process_ov_chunked_upload, args=(job_id,), daemon=True)
+            t.start()
+
+    return jsonify({'ok': True, 'piecesReceived': pieces_received})
+
+
+def _process_ov_chunked_upload(job_id):
+    """
+    Background thread: encode assembled temp file and submit via OrcaVault V3
+    initMemoryRelay + addChunkRelay (or repair missing ChunkStored indices).
+    """
+    job      = ov_upload_jobs[job_id]
+    tmp_path = job['tmp_path']
+    try:
+        active_address = V3_CONTRACT_ADDRESS
+        if not active_address:
+            raise Exception("V3_CONTRACT_ADDRESS not configured")
+
+        w3_local   = Web3(Web3.HTTPProvider(RPC_URL))
+        relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+        contract   = w3_local.eth.contract(
+            address=Web3.to_checksum_address(active_address),
+            abi=V3_ABI,
+        )
+        repair_memory_id = job.get('repair_memory_id')
+
+        # ── REPAIR MODE ───────────────────────────────────────────────────────
+        if repair_memory_id is not None:
+            job['status'] = 'repairing'
+            job['phase']  = 'scanning'
+            print(f"[ov-repair] job {job_id}: scanning blockchain before file encode…")
+            try:
+                present_set = _scan_ov_chunk_indices(w3_local, active_address, repair_memory_id)
+            except Exception as e:
+                raise Exception(f'Failed to query blockchain events: {e}')
+
+            job['phase'] = 'encoding'
+            print(f"[ov-repair] job {job_id}: streaming base64 encode to disk…")
+            mime     = _mime_for_filename(job.get('file_name'))
+            prefix   = 'data:' + mime + ';base64,'
+            b64_path = tmp_path + '.b64'
+            _stream_b64_to_file(tmp_path, b64_path)
+            b64_len      = os.path.getsize(b64_path)
+            data_uri_len = len(prefix) + b64_len
+            num_chunks   = (data_uri_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+
+            def _chunk_at(ci):
+                return _data_uri_chunk_at(ci, prefix, b64_path, b64_len)
+
+            chain_total, _mem_type = _get_ov_memory_created(w3_local, active_address, repair_memory_id)
+            print(
+                f"[ov-repair] memory {repair_memory_id}: found {len(present_set)}/{num_chunks} "
+                f"chunks on-chain (chain totalChunks={chain_total})"
+            )
+            if num_chunks != chain_total:
+                raise Exception(
+                    f'File produces {num_chunks} chunks but memory {repair_memory_id} expects '
+                    f'{chain_total} on-chain. Wrong file or wrong memory ID?'
+                )
+
+            missing_indices = sorted(i for i in (set(range(num_chunks)) - present_set) if i < chain_total)
+            job['total']         = len(missing_indices)
+            job['missing_count'] = len(missing_indices)
+            job['present_count'] = num_chunks - len(missing_indices)
+            job['total_chunks']  = num_chunks
+            job['memoryId']      = repair_memory_id
+
+            if not missing_indices:
+                job['status'] = 'complete'
+                print(f"[ov-repair] job {job_id}: all {num_chunks} chunks present — nothing to repair")
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+                return
+
+            print(f"[ov-repair] job {job_id}: {len(missing_indices)} missing chunks for memory {repair_memory_id}")
+
+            relay_bal_wei = w3_local.eth.get_balance(relay_acct.address)
+            gas_price_est  = _lcai_gas_price()
+            cost_per_chunk = LT_CHUNK_GAS_DEFAULT * gas_price_est
+            total_cost_wei = cost_per_chunk * len(missing_indices)
+            bal_lcai  = float(w3_local.from_wei(relay_bal_wei, 'ether'))
+            need_lcai = float(w3_local.from_wei(total_cost_wei, 'ether'))
+            affordable = relay_bal_wei // cost_per_chunk if cost_per_chunk else 0
+            print(
+                f"[ov-repair] relay balance {bal_lcai:.4f} LCAI — need ~{need_lcai:.2f} LCAI "
+                f"for {len(missing_indices)} chunks (~{affordable} affordable)"
+            )
+            if affordable < 1:
+                raise Exception(
+                    f'Relay wallet has only {bal_lcai:.4f} LCAI but repair needs ~{need_lcai:.2f} LCAI gas '
+                    f'for {len(missing_indices)} chunks. Fund {relay_acct.address} with LCAI and retry.'
+                )
+
+            job['phase'] = 'uploading'
+            _do_ov_repair_upload(job_id, repair_memory_id, _chunk_at, missing_indices, active_address)
+            for path in (tmp_path, b64_path):
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
+            return
+
+        # ── NORMAL UPLOAD MODE ────────────────────────────────────────────────
+        with open(tmp_path, 'rb') as f:
+            raw = f.read()
+        mime = _mime_for_filename(job.get('file_name'))
+        data_uri = 'data:' + mime + ';base64,' + base64.b64encode(raw).decode('ascii')
+        del raw
+        chunks = [data_uri[i:i + CHUNK_SIZE] for i in range(0, len(data_uri), CHUNK_SIZE)]
+
+        job['total']  = len(chunks)
+        job['status'] = 'queued'
+
+        with _relay_job_lock:
+            job['status'] = 'initializing'
+            user_wallet = job['wallet']
+            title       = job.get('title') or 'Untitled'
+            caption     = job.get('caption') or ''
+            mem_type    = job.get('mem_type') or 'video'
+            template    = job.get('template') or ''
+            init_gas    = _cap_gas_price(400_000, _lcai_gas_price())
+
+            with _nonce_lock:
+                nonce = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
+                tx = contract.functions.initMemoryRelay(
+                    Web3.to_checksum_address(user_wallet),
+                    title, caption, mem_type, len(chunks), template,
+                ).build_transaction({
+                    'from':     relay_acct.address,
+                    'nonce':    nonce,
+                    'gas':      400_000,
+                    'gasPrice': init_gas,
+                    'chainId':  CHAIN_ID,
+                })
+                signed  = w3_local.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
+                tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3_local.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+
+            memory_id = _parse_memory_id_from_receipt(w3_local, receipt)
+            if memory_id is None:
+                raise Exception('Failed to get memoryId from initMemoryRelay')
+            job['memoryId'] = memory_id
+            job['status']   = 'uploading'
+            nonce += 1
+
+            _MAX_BATCH = 25
+            _MIN_BATCH = 8
+            batch_size = max(CHUNK_BATCH_SIZE, 20)
+            chunk_idx  = 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_BATCH) as pool:
+                while chunk_idx < len(chunks):
+                    batch          = chunks[chunk_idx: chunk_idx + batch_size]
+                    gas_price      = _lcai_gas_price()
+                    future_map     = {}
+                    had_real_error = False
+
+                    for j, chunk in enumerate(batch):
+                        ci = chunk_idx + j
+                        cn = nonce + j
+                        f  = pool.submit(
+                            _send_one_ov_chunk_tx, memory_id, ci, chunk, cn, gas_price, active_address
+                        )
+                        future_map[f] = (ci, cn, chunk)
+
+                    for f in concurrent.futures.as_completed(future_map):
+                        ci, cn, chunk = future_map[f]
+                        try:
+                            f.result()
+                        except Exception as e:
+                            err_str = str(e).lower()
+                            if 'nonce too low' in err_str or 'already known' in err_str:
+                                print(f"[ov-upload] chunk {ci} got 'nonce too low' — retrying once.")
+                                _send_one_ov_chunk_tx(
+                                    memory_id, ci, chunk, cn, _lcai_gas_price(), active_address
+                                )
+                            else:
+                                had_real_error = True
+                                _send_one_ov_chunk_tx(
+                                    memory_id, ci, chunk, cn, _lcai_gas_price(), active_address
+                                )
+                        job['progress'] += 1
+
+                    nonce     += len(batch)
+                    chunk_idx += len(batch)
+
+                    if had_real_error:
+                        batch_size = max(batch_size - 5, _MIN_BATCH)
+                        print(f"[ov-chunked-upload] batch error — backing off to {batch_size} chunks/batch")
+                    else:
+                        batch_size = min(batch_size + 3, _MAX_BATCH)
+                        print(f"[ov-chunked-upload] clean batch — stepping up to {batch_size} chunks/batch")
+
+        job['status'] = 'complete'
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    except Exception as e:
+        job['status'] = 'error'
+        job['error']  = str(e)
+        print(f"Chunked OrcaVault upload error [{job_id}]: {e}")
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+def _do_ov_repair_upload(job_id, memory_id, chunk_source, missing_indices, active_address):
+    """Submit only missing OrcaVault chunks via addChunkRelay."""
+    job = ov_upload_jobs[job_id]
+    try:
+        with _relay_job_lock:
+            job['status']   = 'uploading'
+            job['phase']    = 'uploading'
+            job['repaired'] = 0
+            job['failed']   = 0
+            relay_acct = Account.from_key(RELAY_PRIVATE_KEY)
+            w3_local   = Web3(Web3.HTTPProvider(RPC_URL))
+            contract   = w3_local.eth.contract(
+                address=Web3.to_checksum_address(active_address),
+                abi=V3_ABI,
+            )
+            chain_total, _ = _get_ov_memory_created(w3_local, active_address, memory_id)
+
+            job['phase'] = 'flushing'
+            flushed = _flush_stuck_relay_nonces(
+                w3_local, relay_acct,
+                repair_video_id=memory_id,
+                contract_address=active_address,
+                job=job,
+            )
+            if flushed:
+                print(f"[ov-repair] job {job_id}: resolved {flushed} pending relay nonce(s) before upload")
+            job['phase'] = 'uploading'
+
+            def _get_chunk(ci):
+                if callable(chunk_source):
+                    return chunk_source(ci)
+                return chunk_source[ci]
+
+            for ci in missing_indices:
+                if ci >= chain_total:
+                    raise Exception(
+                        f'Chunk {ci} is out of range for memory {memory_id} (totalChunks={chain_total}). '
+                        f'Wrong memory ID?'
+                    )
+                chunk_data = _get_chunk(ci)
+                try:
+                    contract.functions.addChunkRelay(memory_id, ci, chunk_data).call(
+                        {'from': relay_acct.address}
+                    )
+                except Exception as sim_err:
+                    raise Exception(
+                        f'Chunk {ci} would revert on-chain for memory {memory_id}: {sim_err}'
+                    ) from sim_err
+
+                with _nonce_lock:
+                    nonce     = w3_local.eth.get_transaction_count(relay_acct.address, 'latest')
+                    gas_price = _lcai_gas_price()
+                    receipt   = _send_one_ov_chunk_tx(
+                        memory_id, ci, chunk_data, nonce, gas_price, active_address,
+                        receipt_timeout=900,
+                    )
+                if receipt.get('status') != 1:
+                    job['failed'] = job.get('failed', 0) + 1
+                    raise Exception(f'Chunk {ci} transaction reverted on-chain')
+                job['repaired'] = job.get('repaired', 0) + 1
+                job['progress'] = job.get('progress', 0) + 1
+                if job['progress'] % 25 == 0:
+                    print(
+                        f"[ov-repair] job {job_id}: {job['progress']}/{len(missing_indices)} "
+                        f"chunks stored for memory {memory_id}"
+                    )
+
+            job['status'] = 'complete'
+            print(f"[ov-repair] job {job_id} complete — repaired {job['repaired']} chunks for memory {memory_id}")
+    except Exception as e:
+        job['status'] = 'error'
+        job['error']  = str(e)
+        print(f"OrcaVault repair upload error [{job_id}]: {e}")
+
+
+@app.route('/api/orcavault/upload-progress/<job_id>', methods=['GET'])
+def orcavault_upload_progress(job_id):
+    """Poll OrcaVault upload job status. Returns status/progress/total/memoryId/error/phase."""
+    job = ov_upload_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    # sets are not JSON-serializable — omit pieces_got from response
+    out = {k: v for k, v in job.items() if k != 'pieces_got'}
+    return jsonify(out)
+
 
 @app.route('/api/relay-upload', methods=['POST'])
 def relay_upload():
