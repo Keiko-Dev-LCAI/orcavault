@@ -25,7 +25,12 @@
   },
   "x402Support": false,
   "active": true,
-  "registrations": [],
+  "registrations": [
+    {
+      "agentId": 1,
+      "agentRegistry": "eip155:9200:0x8cA5cc5037aF83762312b464e04426795d62CC40"
+    }
+  ],
   "supportedTrust": [
     "reputation"
   ]
