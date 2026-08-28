@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Lightchain Archives — Your Memories, On-Chain Forever</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <!--
 ╔══════════════════════════════════════════════════════════════════╗
 ║           AUDIO & VISUAL ARCHIVES — SOLIDITY CONTRACT            ║
@@ -498,8 +501,9 @@ footer a{color:var(--gold);text-decoration:none}
 .upload-warn-check input{width:22px;height:22px;flex-shrink:0;margin-top:2px;accent-color:var(--red);cursor:pointer}
 
 /* ── ADMIN 3-LEVEL MOD ── */
-.admin-mod-wrap{position:relative;display:inline-block}
-.admin-mod-menu{position:absolute;right:0;bottom:100%;margin-bottom:4px;background:var(--bg2);border:1.5px solid rgba(232,82,82,0.5);border-radius:10px;overflow:hidden;z-index:100;min-width:160px;box-shadow:0 4px 20px rgba(0,0,0,0.5)}
+.admin-mod-wrap{position:relative;display:inline-block;z-index:5}
+.admin-mod-menu{position:absolute;left:0;top:100%;margin-top:4px;bottom:auto;right:auto;background:var(--bg2);border:1.5px solid rgba(232,82,82,0.5);border-radius:10px;overflow:visible;z-index:900;min-width:200px;max-width:min(280px,calc(100vw - 24px));box-shadow:0 8px 28px rgba(0,0,0,0.55)}
+.admin-mod-menu.open-left{left:auto;right:0}
 .admin-mod-menu.hidden{display:none}
 .admin-mod-item{display:block;width:100%;padding:12px 16px;border:none;background:transparent;color:var(--text);font-size:16px;font-weight:700;cursor:pointer;text-align:left;font-family:inherit;transition:background .12s;white-space:nowrap}
 .admin-mod-item:hover{background:rgba(232,82,82,0.15)}
@@ -1413,6 +1417,19 @@ const streamPrewarm  = new Set();
 const UPLOAD_PIECE_SIZE = 16 * 1024 * 1024; // 16 MB wire pieces (LightTube-proven)
 const UPLOAD_PARALLEL   = 4;
 const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small stays on /api/relay-upload (MCP)
+const OV_BUILD = '20260828c'; // bump to bust browser cache after deploy
+(function ovCacheBust() {
+  try {
+    const k = 'ov_build';
+    if (localStorage.getItem(k) !== OV_BUILD) {
+      localStorage.setItem(k, OV_BUILD);
+      if (!sessionStorage.getItem('ov_reload_' + OV_BUILD)) {
+        sessionStorage.setItem('ov_reload_' + OV_BUILD, '1');
+        location.reload(true);
+      }
+    }
+  } catch (e) {}
+})();
 
 /** Run async work over 0..n-1 with limited concurrency. */
 async function mapPool(n, concurrency, fn) {
@@ -1461,6 +1478,7 @@ const OV_ADMIN_WALLETS = [
 ];
 let isAdmin             = false;
 let hiddenMemories      = new Set();
+let hiddenVaults        = new Set(); // archive shells removed from My Archives
 let permRemovedMemories = new Set();
 let bannedWallets       = new Set();
 let visibilityOverrides = {};   // { memoryIdx_str: { setter: wallet, visibility: 'public'|'private' } }
@@ -1482,11 +1500,13 @@ async function loadOVHidden() {
     permRemovedMemories = new Set((data.perm_removed  || []).map(String));
     bannedWallets       = new Set((data.banned_wallets|| []).map(w => w.toLowerCase()));
     visibilityOverrides = data.visibility_overrides || {};
+    hiddenVaults        = new Set((data.hidden_vaults || []).map(String));
   } catch(e) {
     hiddenMemories      = new Set();
     permRemovedMemories = new Set();
     bannedWallets       = new Set();
     visibilityOverrides = {};
+    hiddenVaults        = new Set();
   }
 }
 
@@ -1752,11 +1772,19 @@ function ovAdminBtnHtml(memoryId, isHidden, isPerm) {
 }
 
 function ovAdminMenu(menuId) {
-  // Close all other open menus first
   document.querySelectorAll('.admin-mod-menu:not(.hidden)').forEach(m => { if (m.id !== menuId) m.classList.add('hidden'); });
   const menu = document.getElementById(menuId);
-  if (menu) menu.classList.toggle('hidden');
-  // Close on outside click
+  if (!menu) return;
+  menu.classList.toggle('hidden');
+  if (!menu.classList.contains('hidden')) {
+    menu.classList.remove('open-left');
+    // Keep labels fully visible: if menu would clip off the right edge, open leftward
+    requestAnimationFrame(() => {
+      const rect = menu.getBoundingClientRect();
+      if (rect.right > window.innerWidth - 8) menu.classList.add('open-left');
+      if (rect.left < 8) menu.classList.remove('open-left');
+    });
+  }
   setTimeout(() => {
     function outsideClose(e) {
       if (!e.target.closest('.admin-mod-wrap')) {
@@ -2999,6 +3027,55 @@ function goViewVaultFromMemory() {
   if (currentVaultId) loadAndShowVault(currentVaultId);
   else showScreen('landing');
 }
+
+async function hideArchiveFromList(vaultId, name) {
+  if (!wallet) { showToast('Connect wallet first', true); return; }
+  const label = name || ('Archive #' + vaultId);
+  if (!confirm('Remove "' + label + '" from My Archives?\n\nThis hides it in the app (does not erase on-chain data). You can ask an admin to restore later if needed.')) return;
+  try {
+    const timestamp = Date.now().toString();
+    const message = `Hide OrcaVault archive\nVault ID: ${vaultId}\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${timestamp}`;
+    const s = signer || (provider ? await provider.getSigner() : null);
+    if (!s) throw new Error('No signer');
+    const signature = await s.signMessage(message);
+    const body = {
+      vaultId: String(vaultId),
+      wallet: wallet.toLowerCase(),
+      signature,
+      timestamp,
+      message,
+    };
+    if (_ovAdminKey) body.adminKey = _ovAdminKey;
+    const res = await fetch(`${RELAY_URL}/api/orcavault/hide-vault`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Hide failed');
+    hiddenVaults.add(String(vaultId));
+    showToast('Archive removed from My Archives');
+    loadMyArchives();
+  } catch (e) {
+    showToast('Could not remove archive: ' + (e.message || e), true);
+  }
+}
+
+/** After deleting the last visible memory, offer to hide the empty archive shell. */
+async function maybeCleanupEmptyArchive(vaultId) {
+  try {
+    // Re-count visible memories in the current grid state
+    const remaining = (currentMemories || []).filter(m => {
+      if (hiddenMemories.has(String(m.idx))) return false;
+      if (permRemovedMemories.has(String(m.idx))) return false;
+      return true;
+    });
+    if (remaining.length > 0) return;
+    const ok = confirm('That was the last memory in this archive.\n\nRemove the empty archive from My Archives? (Hides it in the app — on-chain data stays.)');
+    if (ok) await hideArchiveFromList(vaultId, (currentVaultData && currentVaultData.name) || '');
+  } catch (e) { /* non-fatal */ }
+}
+
 function goMyArchives() {
   showScreen('my-archives');
   loadMyArchives();
@@ -3035,8 +3112,13 @@ async function loadMyArchives() {
         emoji:    tmplObj.emoji,
       };
     });
+    const visibleVaults = vaultList.filter(v => !hiddenVaults.has(String(v.id)));
+    if (visibleVaults.length === 0) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">No archives yet</div><div class="empty-state-sub">You haven't created any archives (or empty ones were removed). Start your first one!</div><button class="btn btn-gold" onclick="showScreen('create')" style="margin-top:8px">+ Create Archive</button></div>`;
+      return;
+    }
     let html = '<div class="vault-grid">';
-    vaultList.forEach(v => {
+    visibleVaults.forEach(v => {
       html += `<div class="vault-card" onclick="currentVaultId=${v.id};loadAndShowVault(${v.id})">
         <div class="vault-card-emoji">${v.emoji}</div>
         <div class="vault-card-name">${escHtml(v.name)}</div>
@@ -3046,6 +3128,8 @@ async function loadMyArchives() {
           <span>📅 ${new Date(v.ts*1000).toLocaleDateString()}</span>
           <span>🆔 Archive #${v.id}</span>
         </div>
+        <button class="btn btn-outline" style="width:100%;margin-top:12px;justify-content:center;font-size:15px;border-color:rgba(232,82,82,0.4);color:var(--red)"
+          onclick="event.stopPropagation();hideArchiveFromList(${v.id}, '${escHtml(v.name).replace(/'/g, "\\'")}')">🗑️ Remove from My Archives</button>
       </div>`;
     });
     html += '</div>';
@@ -3286,19 +3370,10 @@ function getChunkHintHTML(byteSize, type) {
 }
 
 async function storeMemory() {
-  if (!contract) { showToast('Please connect your wallet', true); return; }
+  if (!contract && !relayAccess) { showToast('Please connect your wallet', true); return; }
   const title = document.getElementById('mem-title').value.trim();
   if (!title) { showToast('Please enter a title', true); return; }
   if (!currentMemType) { showToast('Please select a memory type', true); return; }
-
-  let dataURI = '';
-  if (currentMemType === 'text') {
-    dataURI = document.getElementById('mem-text-content').value.trim();
-    if (!dataURI) { showToast('Please enter your text', true); return; }
-  } else {
-    if (!pendingFileDataURI) { showToast('Please upload a file first', true); return; }
-    dataURI = pendingFileDataURI;
-  }
 
   // Show upload warning on first upload (every session)
   if (!uploadWarningAccepted) {
@@ -3322,6 +3397,39 @@ async function storeMemory() {
   const date    = document.getElementById('mem-date').value || '';
   const btn = document.getElementById('btn-store-memory');
   btn.disabled = true;
+
+  // NEVER send large video/audio through hundreds of wallet chunk txs.
+  // Route to the relay job uploader (or prompt to unlock relay access).
+  const bigMedia = pendingFile && (currentMemType === 'video' || currentMemType === 'audio')
+    && pendingFile.size >= JOB_UPLOAD_MIN_BYTES;
+  if (bigMedia) {
+    const tmplName = (currentVaultData && currentVaultData.template) ? currentVaultData.template : '';
+    if (relayAccess && RELAY_URL) {
+      btn.disabled = false;
+      return doJobRelayUpload({
+        file: pendingFile,
+        title,
+        caption,
+        memType: currentMemType || 'video',
+        template: tmplName,
+      });
+    }
+    btn.disabled = false;
+    showToast('Big movies upload in one click through the relay — unlock one-click uploads first (⚡).', true);
+    try { showRelayUnlockModal(); } catch (e) {}
+    const unlockSec = document.getElementById('relay-unlock-section');
+    if (unlockSec) unlockSec.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
+  let dataURI = '';
+  if (currentMemType === 'text') {
+    dataURI = document.getElementById('mem-text-content').value.trim();
+    if (!dataURI) { showToast('Please enter your text', true); btn.disabled = false; return; }
+  } else {
+    if (!pendingFileDataURI) { showToast('Please upload a file first', true); btn.disabled = false; return; }
+    dataURI = pendingFileDataURI;
+  }
 
   // Route: chunked (V2) or single (V1/V2)
   // Lightchain RPC rejects any single tx over 128KB. A base64 dataURI inflates
@@ -4504,7 +4612,13 @@ async function creatorDeleteMemory() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { showToast(data.error || 'Delete failed', true); if (btn) { btn.disabled = false; btn.textContent = '🗑️ Delete My Memory'; } return; }
     showToast('Memory deleted from archive');
+    // Drop from local list so empty-shell cleanup can see it
+    const deletedIdx = _currentViewMemIdx;
+    currentMemories = (currentMemories || []).filter(m => Number(m.idx) !== Number(deletedIdx));
+    hiddenMemories.add(String(deletedIdx));
+    const vaultIdForCleanup = currentVaultId;
     goViewVaultFromMemory();
+    setTimeout(() => { maybeCleanupEmptyArchive(vaultIdForCleanup); }, 400);
   } catch(e) {
     showToast('Error: ' + e.message, true);
     const btn = document.querySelector('.creator-delete-btn');

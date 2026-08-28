@@ -62,6 +62,7 @@ PAID_WALLETS_FILE        = os.environ.get("PAID_WALLETS_FILE", "/data/paid_walle
 LIGHTTUBE_HIDDEN_FILE    = os.environ.get("LIGHTTUBE_HIDDEN_FILE", "/data/lighttube_hidden.json")
 LIGHTTUBE_OVERRIDES_FILE = os.environ.get("LIGHTTUBE_OVERRIDES_FILE", "/data/lighttube_overrides.json")
 ORCAVAULT_HIDDEN_FILE      = os.environ.get("ORCAVAULT_HIDDEN_FILE", "/data/orcavault_hidden.json")
+ORCAVAULT_HIDDEN_VAULTS_FILE = os.environ.get("ORCAVAULT_HIDDEN_VAULTS_FILE", "/data/orcavault_hidden_vaults.json")
 ORCAVAULT_VISIBILITY_FILE  = os.environ.get("ORCAVAULT_VISIBILITY_FILE", "/data/orcavault_visibility.json")
 LIGHTTUBE_ADMIN_KEY      = os.environ.get("LIGHTTUBE_ADMIN_KEY", "")
 # Comma-separated IDs that are ALWAYS hidden (survive redeploys without a volume)
@@ -2492,6 +2493,24 @@ def save_orcavault_hidden(hidden):
     except Exception as e:
         print(f"Warning: could not save orcavault_hidden: {e}")
 
+def load_orcavault_hidden_vaults():
+    """Load hidden OrcaVault archive (vault) IDs from disk."""
+    try:
+        os.makedirs(os.path.dirname(ORCAVAULT_HIDDEN_VAULTS_FILE), exist_ok=True)
+        with open(ORCAVAULT_HIDDEN_VAULTS_FILE, 'r') as f:
+            return set(str(x) for x in json.load(f))
+    except Exception:
+        return set()
+
+def save_orcavault_hidden_vaults(hidden):
+    """Persist hidden OrcaVault archive IDs to disk."""
+    try:
+        os.makedirs(os.path.dirname(ORCAVAULT_HIDDEN_VAULTS_FILE), exist_ok=True)
+        with open(ORCAVAULT_HIDDEN_VAULTS_FILE, 'w') as f:
+            json.dump(list(hidden), f)
+    except Exception as e:
+        print(f"Warning: could not save orcavault_hidden_vaults: {e}")
+
 def load_orcavault_visibility():
     """Returns dict: { memoryIdx_str: { setter: wallet, visibility: 'public'|'private' } }"""
     try:
@@ -3755,7 +3774,102 @@ def orcavault_get_hidden():
     perm   = get_ov_permanent_hidden()
     banned = get_ov_banned_wallets()
     vis    = load_orcavault_visibility()
-    return jsonify({'hidden': list(hidden), 'perm_removed': list(perm), 'banned_wallets': list(banned), 'visibility_overrides': vis})
+    hidden_vaults = load_orcavault_hidden_vaults()
+    return jsonify({
+        'hidden': list(hidden),
+        'perm_removed': list(perm),
+        'banned_wallets': list(banned),
+        'visibility_overrides': vis,
+        'hidden_vaults': list(hidden_vaults),
+    })
+
+
+@app.route('/api/orcavault/hide-vault', methods=['POST'])
+def orcavault_hide_vault():
+    """
+    Hide an archive (vault) from My Archives / app lists.
+    Body: { vaultId, adminKey } OR owner-signed
+      { vaultId, wallet, signature, timestamp, message }.
+    Message must be:
+      Hide OrcaVault archive
+      Vault ID: {id}
+      Wallet: {wallet}
+      Timestamp: {timestamp}
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    vault_id = body.get('vaultId')
+    if vault_id is None or str(vault_id).strip() == '':
+        return jsonify({'error': 'vaultId required'}), 400
+    vault_id = str(vault_id).strip()
+
+    admin_key = (body.get('adminKey') or '').strip()
+    is_admin = bool(LIGHTTUBE_ADMIN_KEY) and admin_key and admin_key == LIGHTTUBE_ADMIN_KEY
+
+    if not is_admin:
+        wallet = (body.get('wallet') or '').strip().lower()
+        signature = (body.get('signature') or '').strip()
+        timestamp = str(body.get('timestamp') or '').strip()
+        if not wallet or not signature or not timestamp:
+            return jsonify({'error': 'wallet signature required (or adminKey)'}), 401
+        expected = (
+            f"Hide OrcaVault archive\nVault ID: {vault_id}\n"
+            f"Wallet: {wallet}\nTimestamp: {timestamp}"
+        )
+        try:
+            recovered = Account.recover_message(
+                encode_defunct(text=expected), signature=signature
+            ).lower()
+            if recovered != wallet:
+                return jsonify({'error': 'Signature does not match wallet'}), 401
+        except Exception as e:
+            return jsonify({'error': f'Signature error: {e}'}), 401
+        # Owner check: VaultCreated owner on V1 or V2
+        try:
+            w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+            owner_ok = False
+            v1_addr = os.environ.get("ORCAVAULT_V1_ADDRESS", "0x2e7507aB9aF8bd706B1B28B5a7316ce5F17d3D4e")
+            VAULT_ABI = [{"inputs":[{"name":"","type":"uint256"}],"name":"vaults","outputs":[
+                {"name":"owner","type":"address"},{"name":"name","type":"string"},{"name":"template","type":"string"},
+                {"name":"description","type":"string"},{"name":"createdAt","type":"uint256"},{"name":"exists","type":"bool"}
+            ],"stateMutability":"view","type":"function"}]
+            for addr in (v1_addr, ORCAVAULT_V2_ADDRESS):
+                if not addr:
+                    continue
+                try:
+                    ct = w3_local.eth.contract(address=Web3.to_checksum_address(addr), abi=VAULT_ABI)
+                    vm = ct.functions.vaults(int(vault_id)).call()
+                    if vm[5] and vm[0].lower() == wallet:
+                        owner_ok = True
+                        break
+                except Exception:
+                    continue
+            if not owner_ok:
+                return jsonify({'error': 'Wallet is not the archive owner'}), 403
+        except Exception as e:
+            return jsonify({'error': f'Owner check failed: {e}'}), 500
+
+    hidden = load_orcavault_hidden_vaults()
+    hidden.add(vault_id)
+    save_orcavault_hidden_vaults(hidden)
+    print(f"[ORCAVAULT MOD] Hidden vault {vault_id}")
+    return jsonify({'success': True, 'hidden_vaults': len(hidden)})
+
+
+@app.route('/api/orcavault/unhide-vault', methods=['POST'])
+def orcavault_unhide_vault():
+    """Admin restore a hidden archive. Body: { vaultId, adminKey }."""
+    if not LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Admin not configured on server'}), 500
+    body = request.get_json(force=True, silent=True) or {}
+    if body.get('adminKey') != LIGHTTUBE_ADMIN_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+    vault_id = body.get('vaultId')
+    if vault_id is None:
+        return jsonify({'error': 'vaultId required'}), 400
+    hidden = load_orcavault_hidden_vaults()
+    hidden.discard(str(vault_id))
+    save_orcavault_hidden_vaults(hidden)
+    return jsonify({'success': True, 'hidden_vaults': len(hidden)})
 
 @app.route('/api/orcavault/hide', methods=['POST'])
 def orcavault_hide():
