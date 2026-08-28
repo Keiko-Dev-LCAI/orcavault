@@ -1,0 +1,12 @@
+{
+  "type": "orcavault-content-hash-check-v1",
+  "agentId": 1,
+  "memoryId": 1,
+  "version": "v3",
+  "streamUrl": "https://orcavault-production.up.railway.app/api/media/stream/orcavault/v3/1",
+  "viewerUrl": "https://orcavault.win/?vault=2",
+  "contentHash": "0x1a49e652145046c6868a1f75de41ef0286de6bd2d22cec6e1f0917b3f20509cd",
+  "mime": "text/plain",
+  "bytes": 51,
+  "check": "keccak256(stream body) == contentHash"
+}
