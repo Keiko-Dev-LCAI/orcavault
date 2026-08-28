@@ -78,6 +78,11 @@ LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thum
 ORCAVAULT_THUMBS_DIR     = os.environ.get("ORCAVAULT_THUMBS_DIR", "/data/ov_thumbs")
 LIGHTTUBE_REPAIR_CACHE_DIR = os.environ.get("LIGHTTUBE_REPAIR_CACHE_DIR", "/data/lt_repair_cache")
 OV_REPAIR_CACHE_DIR        = os.environ.get("OV_REPAIR_CACHE_DIR", "/data/ov_repair_cache")
+# ERC-8004 Validation Registry (Route C). Optional agent key enables best-effort
+# post-upload validationRequest from the agent owner; relay responds as validator.
+ERC8004_VALIDATION_REGISTRY = os.environ.get("ERC8004_VALIDATION_REGISTRY", "0x4F880C5b75102620f70CB010f8d776538a340b49")
+ERC8004_AGENT_ID            = int(os.environ.get("ERC8004_AGENT_ID", "1"))
+ORCAVAULT_AGENT_PRIVATE_KEY = os.environ.get("ORCAVAULT_AGENT_PRIVATE_KEY", "")
 LT_STREAM_CACHE_DIR      = os.environ.get("LT_STREAM_CACHE_DIR", "/data/lt_stream_cache")
 OV_STREAM_CACHE_DIR      = os.environ.get("OV_STREAM_CACHE_DIR", "/data/ov_stream_cache")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
@@ -3299,6 +3304,123 @@ def orcavault_upload_progress(job_id):
     return jsonify(out)
 
 
+_ERC8004_VALIDATION_ABI = [
+    {
+        "name": "validationRequest",
+        "type": "function",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "validatorAddress", "type": "address"},
+            {"name": "agentId", "type": "uint256"},
+            {"name": "requestURI", "type": "string"},
+            {"name": "requestHash", "type": "bytes32"},
+        ],
+        "outputs": [],
+    },
+    {
+        "name": "validationResponse",
+        "type": "function",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "requestHash", "type": "bytes32"},
+            {"name": "response", "type": "uint8"},
+            {"name": "responseURI", "type": "string"},
+            {"name": "responseHash", "type": "bytes32"},
+            {"name": "tag", "type": "string"},
+        ],
+        "outputs": [],
+    },
+]
+
+
+def _maybe_erc8004_validate_memory(memory_id, data_uri, mem_type):
+    """
+    Best-effort ERC-8004 ValidationRegistry write for a stored memory.
+    Requires ORCAVAULT_AGENT_PRIVATE_KEY (agent owner requests; relay responds as validator).
+    Never raises to the caller — validation must not break uploads.
+    """
+    try:
+        if not ERC8004_VALIDATION_REGISTRY or not ORCAVAULT_AGENT_PRIVATE_KEY or not RELAY_PRIVATE_KEY:
+            return
+        # Decode content bytes from data URI for the content-hash check
+        raw = data_uri
+        if ',' in raw:
+            raw = raw.split(',', 1)[1]
+        try:
+            content = base64.b64decode(raw)
+        except Exception:
+            content = data_uri.encode('utf-8', errors='ignore')
+        content_hash = w3.keccak(content)
+        payload = {
+            'type': 'orcavault-content-hash-check-v1',
+            'agentId': ERC8004_AGENT_ID,
+            'memoryId': int(memory_id),
+            'version': 'v3',
+            'streamUrl': f'{os.environ.get("PUBLIC_RELAY_URL", "https://orcavault-production.up.railway.app").rstrip("/")}/api/media/stream/orcavault/v3/{int(memory_id)}',
+            'contentHash': content_hash.hex(),
+            'memType': mem_type,
+            'bytes': len(content),
+            'check': 'keccak256(decoded dataURI body) == contentHash',
+        }
+        import json as _json
+        raw_payload = _json.dumps(payload, separators=(',', ':'), sort_keys=True).encode()
+        request_hash = w3.keccak(raw_payload)
+        # Off-chain URI: stream URL is enough for v1 (hash is committed in requestHash)
+        request_uri = payload['streamUrl']
+        agent_acct = Account.from_key(
+            ORCAVAULT_AGENT_PRIVATE_KEY if ORCAVAULT_AGENT_PRIVATE_KEY.startswith('0x')
+            else '0x' + ORCAVAULT_AGENT_PRIVATE_KEY
+        )
+        relay_acct = get_relay_account()
+        # Reference contract forbids validatorAddress == msg.sender, so the agent
+        # owner must submit the request naming the relay as validator.
+        w3_local = Web3(Web3.HTTPProvider(RPC_URL))
+        ct = w3_local.eth.contract(
+            address=Web3.to_checksum_address(ERC8004_VALIDATION_REGISTRY),
+            abi=_ERC8004_VALIDATION_ABI,
+        )
+        # Request
+        with _nonce_lock:
+            nonce = w3_local.eth.get_transaction_count(agent_acct.address, 'pending')
+            tx = ct.functions.validationRequest(
+                relay_acct.address, ERC8004_AGENT_ID, request_uri, request_hash
+            ).build_transaction({
+                'from': agent_acct.address,
+                'nonce': nonce,
+                'gas': 400_000,
+                'gasPrice': _lcai_gas_price(),
+                'chainId': CHAIN_ID,
+            })
+            signed = agent_acct.sign_transaction(tx)
+            tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
+        w3_local.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+        # Re-check hash (self-attested) then respond as relay validator
+        if w3.keccak(content) != content_hash:
+            score = 0
+            tag = 'content-hash-mismatch'
+        else:
+            score = 100
+            tag = 'content-hash-match'
+        zero_hash = b'\x00' * 32
+        with _nonce_lock:
+            nonce = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
+            tx = ct.functions.validationResponse(
+                request_hash, score, request_uri, zero_hash, tag
+            ).build_transaction({
+                'from': relay_acct.address,
+                'nonce': nonce,
+                'gas': 300_000,
+                'gasPrice': _lcai_gas_price(),
+                'chainId': CHAIN_ID,
+            })
+            signed = relay_acct.sign_transaction(tx)
+            tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
+        w3_local.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+        print(f"[erc8004] validated memory {memory_id} score={score} requestHash={request_hash.hex()}")
+    except Exception as e:
+        print(f"[erc8004] validation skipped for memory {memory_id}: {e}")
+
+
 @app.route('/api/relay-upload', methods=['POST'])
 def relay_upload():
     """
@@ -3409,6 +3531,16 @@ def relay_upload():
                 relay_acct
             )
             tx_hashes.append(tx_hash)
+
+        # Best-effort ERC-8004 validation (never blocks the user upload).
+        try:
+            threading.Thread(
+                target=_maybe_erc8004_validate_memory,
+                args=(memory_id, data_uri, mem_type),
+                daemon=True,
+            ).start()
+        except Exception as _ve:
+            print(f"[erc8004] validation spawn skipped: {_ve}")
 
         return jsonify({
             'success':     True,
