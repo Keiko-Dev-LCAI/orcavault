@@ -1549,6 +1549,7 @@ async function connectViaWalletConnect() {
     if (V2_CONTRACT_ADDRESS) contractV2 = new ethers.Contract(V2_CONTRACT_ADDRESS, V2_ABI, signer);
     if (V3_CONTRACT_ADDRESS) contractV3 = new ethers.Contract(V3_CONTRACT_ADDRESS, V3_ABI, signer);
     isAdmin = OV_ADMIN_WALLETS.includes(wallet.toLowerCase());
+    if (isAdmin) _browseAllMemories = null; // force Browse reload so admins see hidden/flagged items
     hideLoading();
     updateNavWallet();
     updateRecoveryPanels();
@@ -1606,6 +1607,7 @@ async function connectWallet() {
       contractV3 = new ethers.Contract(V3_CONTRACT_ADDRESS, V3_ABI, signer);
     }
     isAdmin = OV_ADMIN_WALLETS.includes(wallet.toLowerCase());
+    if (isAdmin) _browseAllMemories = null; // force Browse reload so admins see hidden/flagged items
     hideLoading();
     updateNavWallet();
     updateRecoveryPanels();
@@ -1644,6 +1646,7 @@ async function disconnectWallet() {
   if (_wcProv) { try { _wcProv.disconnect(); } catch {} _wcProv = null; }
   relayAccess = false; relayTier = 'none'; relayFee = null; relayWalletAddr = '';
   isAdmin = false; _ovAdminKey = null;
+  _browseAllMemories = null; // force Browse reload so flagged items are hidden again after log-off
   const bc = document.getElementById('btn-connect'); if (bc) bc.style.display = '';
   document.getElementById('btn-disconnect').style.display = 'none';
   document.getElementById('btn-my-archives').style.display = 'none';
@@ -1753,6 +1756,7 @@ async function ovAdminAct(action, memoryId) {
     if (action === 'ban' && data.wallet)  { bannedWallets.add(data.wallet.toLowerCase()); }
     showToast(successMsg);
     renderMemoriesGrid();
+    if (_browseAllMemories) renderBrowseGrid(_browseCat);
   } catch(e) { showToast('Error: ' + e.message, true); }
 }
 
@@ -4177,7 +4181,8 @@ async function loadPublicBrowse() {
     // Parse privacy + filter
     const publicMems = allMems.filter(m => {
       const parsed = parseCaption(m.caption);
-      if (parsed.isPrivate) return false;
+      if (parsed.isPrivate) return false;              // private is never shown publicly, even to admins
+      if (isAdmin) return true;                         // admins keep hidden/perm/banned items on Browse so they can moderate + restore
       if (permRemovedMemories.has(String(m.idx))) return false;
       if (hiddenMemories.has(String(m.idx))) return false;
       if (m.addedBy && bannedWallets.has(m.addedBy.toLowerCase())) return false;
@@ -4212,20 +4217,35 @@ function renderBrowseGrid(cat) {
   const pageItems = filtered.slice(start, start + _browsePageSize);
   let html = '<div class="memory-grid">';
   pageItems.forEach(m => {
+    const isHidden = hiddenMemories.has(String(m.idx));
+    if (isHidden && !isAdmin) return;
+    const isPerm = permRemovedMemories.has(String(m.idx));
+    if (isPerm && !isAdmin) return;
+    const isBanned = m.addedBy && bannedWallets.has(m.addedBy.toLowerCase());
+    if (isBanned && !isAdmin) return;
     const icon = typeIcons[m.memType] || '📎';
     const thumbHtml = buildMemoryThumbHtml(m);
     const dateStr = m.date ? new Date(m.date).toLocaleDateString() : '';
     const shareUrl = `${BASE_URL}?vault=${m.vaultId}&item=${m.idx}`;
-    html += `<div class="memory-card" onclick="window.location.href='${escHtml(shareUrl)}'">
+    const adminBtn = isAdmin ? ovAdminBtnHtml(m.idx, isHidden, isPerm) : '';
+    let modBadge = '';
+    if (isPerm) modBadge = '<span class="chunked-badge" style="background:rgba(232,82,82,0.2);color:#e85252;border-color:rgba(232,82,82,0.5)">🚫 Perm Removed</span>';
+    else if (isBanned) modBadge = '<span class="chunked-badge" style="background:rgba(232,82,82,0.2);color:#e85252;border-color:rgba(232,82,82,0.5)">⛔ Banned Wallet</span>';
+    else if (isHidden) modBadge = '<span class="chunked-badge" style="background:rgba(232,184,75,0.2);color:var(--gold);border-color:rgba(232,184,75,0.5)">🙈 Hidden</span>';
+    const flagged = isHidden || isPerm || isBanned;
+    const cardStyle = flagged ? 'opacity:0.72;border-color:rgba(232,82,82,0.4)' : '';
+    html += `<div class="memory-card" style="${cardStyle}" onclick="window.location.href='${escHtml(shareUrl)}'">
       ${thumbHtml}
       <div class="memory-card-body">
         <div class="memory-type-badge">${icon} ${capitalize(m.memType)}</div>
         <div class="memory-card-title">${escHtml(m.title)}</div>
+        ${modBadge}
         ${dateStr ? `<div class="memory-card-date">${dateStr}</div>` : ''}
         <div style="font-size:14px;color:var(--muted);margin-top:4px">Archive #${m.vaultId}</div>
       </div>
       <div class="chain-link-row">
         <button class="chain-link-btn" onclick="event.stopPropagation();navigator.clipboard.writeText('${escHtml(shareUrl)}').then(()=>showToast('Link copied!'))" style="background:rgba(232,184,75,0.15);border-color:var(--gold);color:var(--gold);font-weight:700">📤 Share</button>
+        ${adminBtn}
       </div>
     </div>`;
   });
