@@ -1124,6 +1124,22 @@ footer a{color:var(--gold);text-decoration:none}
   </div>
 </div>
 
+
+<!-- ── RATE ORCAVAULT (ERC-8004 Reputation — client-signed) ── -->
+<div id="modal-rate-agent" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:480px">
+    <div class="modal-title">Rate OrcaVault</div>
+    <div class="modal-sub">Optional. Your wallet signs on-chain feedback for agentId 1 (0–100). Skip anytime — this never blocks your upload.</div>
+    <div style="display:flex;gap:10px;align-items:center;margin:18px 0">
+      <input id="rate-agent-score" type="number" min="0" max="100" value="90" class="form-input" style="width:100px;font-size:18px">
+      <span style="color:var(--muted)">/ 100</span>
+    </div>
+    <div style="display:flex;gap:12px">
+      <button class="btn btn-outline" onclick="document.getElementById('modal-rate-agent').classList.add('hidden')" style="flex:1">Skip</button>
+      <button class="btn btn-gold" id="btn-rate-agent" onclick="submitAgentFeedback()" style="flex:2">Submit rating</button>
+    </div>
+  </div>
+</div>
 <!-- ── ORCAVAULT REPAIR MODAL (owner Fix Missing Chunks) ── -->
 <div id="ov-repair-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:600;overflow-y:auto;padding:20px">
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;width:100%;max-width:620px;margin:auto;padding:32px">
@@ -1430,7 +1446,10 @@ const streamPrewarm  = new Set();
 const UPLOAD_PIECE_SIZE = 16 * 1024 * 1024; // 16 MB wire pieces (LightTube-proven)
 const UPLOAD_PARALLEL   = 4;
 const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small stays on /api/relay-upload (MCP)
-const OV_BUILD = '20260828e'; // bump to bust browser cache after deploy
+const ERC8004_REPUTATION_REGISTRY = '0x62e7E1502Ef822FBfb66554f072b46DF8A8c08D0';
+const ERC8004_AGENT_ID = 1;
+const ERC8004_AGENT_OWNER = '0xBF78164b6626ea8096C4B6b268b0b70f86f66893';
+const OV_BUILD = '20260828f'; // bump to bust browser cache after deploy
 (function ovCacheBust() {
   try {
     const k = 'ov_build';
@@ -3061,6 +3080,53 @@ function showArchivePickerThen(cb) {
   modal.classList.remove('hidden');
 }
 
+
+function maybeOfferAgentRating() {
+  try {
+    if (!wallet || !provider) return;
+    const w = wallet.toLowerCase();
+    if (w === ERC8004_AGENT_OWNER.toLowerCase()) return; // never self-review in UI
+    if (relayWalletAddr && w === relayWalletAddr.toLowerCase()) return;
+    // Don't spam: once per session after a successful store
+    if (sessionStorage.getItem('ov_rated_session')) return;
+    document.getElementById('modal-rate-agent')?.classList.remove('hidden');
+  } catch (e) {}
+}
+
+async function submitAgentFeedback() {
+  const btn = document.getElementById('btn-rate-agent');
+  try {
+    if (!wallet || !provider) { showToast('Connect wallet first', true); return; }
+    const w = wallet.toLowerCase();
+    if (w === ERC8004_AGENT_OWNER.toLowerCase() || (relayWalletAddr && w === relayWalletAddr.toLowerCase())) {
+      showToast('The agent owner/operator cannot rate itself — ask a client wallet to leave feedback.', true);
+      document.getElementById('modal-rate-agent').classList.add('hidden');
+      return;
+    }
+    let score = parseInt(document.getElementById('rate-agent-score')?.value || '0', 10);
+    if (Number.isNaN(score) || score < 0 || score > 100) { showToast('Score must be 0–100', true); return; }
+    const s = signer || (await provider.getSigner());
+    if (btn) btn.disabled = true;
+    showLoading('Submitting on-chain rating…', 'Approve the near-zero-gas feedback tx in your wallet.');
+    const abi = ['function giveFeedback(uint256 agentId,int128 value,uint8 valueDecimals,string tag1,string tag2,string endpoint,string feedbackURI,bytes32 feedbackHash)'];
+    const ct = new ethers.Contract(ERC8004_REPUTATION_REGISTRY, abi, s);
+    const tx = await ct.giveFeedback(ERC8004_AGENT_ID, score, 0, 'starred', '', 'https://orcavault.win', '', ethers.ZeroHash);
+    await tx.wait();
+    hideLoading();
+    sessionStorage.setItem('ov_rated_session', '1');
+    document.getElementById('modal-rate-agent').classList.add('hidden');
+    showToast('Thanks — your rating is on Lightchain.');
+  } catch (e) {
+    hideLoading();
+    if (btn) btn.disabled = false;
+    const msg = (e && (e.shortMessage || e.message)) || String(e);
+    if (/reject|denied|4001/i.test(msg)) showToast('Rating cancelled — no problem.', true);
+    else showToast('Rating failed: ' + msg, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function payRelayUnlock() {
   const btn = document.getElementById('btn-relay-pay');
   try {
@@ -3820,6 +3886,7 @@ async function doRelayUpload() {
     const shareUrl = getMemoryURL(currentVaultId, 300000 + Number(data.memoryId));
     openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain — no wallet taps needed!', shareUrl, () => {
       loadAndShowVault(currentVaultId);
+      setTimeout(maybeOfferAgentRating, 600);
     });
   } catch(e) {
     hideLoading();
@@ -3946,6 +4013,7 @@ async function doJobRelayUpload({ file, title, caption, memType, template }) {
     const shareUrl = getMemoryURL(currentVaultId, 300000 + Number(memoryId));
     openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain — no wallet taps needed!', shareUrl, () => {
       loadAndShowVault(currentVaultId);
+      setTimeout(maybeOfferAgentRating, 600);
     });
   } catch (err) {
     overlay.style.display = 'none';
