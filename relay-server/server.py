@@ -1924,8 +1924,10 @@ def lighttube_stream_status(version, video_id):
         serve_path, complete, nbytes = _stream_media_path(out_path)
 
         if complete and serve_path:
+            # File is assembled on disk. The in-memory build dict may be None here
+            # (e.g. after a relay restart wiped the cache), so guard every build.get().
             meta = _stream_load_meta(meta_path) or {}
-            total = int(meta.get('totalChunks') or build.get('total') or 0)
+            total = int(meta.get('totalChunks') or (build or {}).get('total') or 0)
             if total <= 0:
                 w3_local = Web3(Web3.HTTPProvider(RPC_URL))
                 total = int(_get_video_total_chunks_on_chain(w3_local, contract_address, video_id))
@@ -2014,9 +2016,11 @@ def orcavault_stream_status(version, memory_id):
         serve_path, complete, nbytes = _stream_media_path(out_path)
 
         if complete and serve_path:
+            # File is assembled on disk. The in-memory build dict may be None here
+            # (e.g. after a relay restart wiped the cache), so guard every build.get().
             meta = _stream_load_meta(meta_path) or {}
-            total = int(meta.get('totalChunks') or build.get('total') or 0)
-            mem_type = meta.get('memType', build.get('memType', ''))
+            total = int(meta.get('totalChunks') or (build or {}).get('total') or 0)
+            mem_type = meta.get('memType', (build or {}).get('memType', ''))
             if total <= 0:
                 w3_local = Web3(Web3.HTTPProvider(RPC_URL))
                 total, mem_type = _get_ov_memory_created(w3_local, contract_address, memory_id)
