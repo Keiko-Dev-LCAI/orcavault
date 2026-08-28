@@ -1453,7 +1453,7 @@ const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small
 const ERC8004_REPUTATION_REGISTRY = '0x62e7E1502Ef822FBfb66554f072b46DF8A8c08D0';
 const ERC8004_AGENT_ID = 1;
 const ERC8004_AGENT_OWNER = '0xBF78164b6626ea8096C4B6b268b0b70f86f66893';
-const OV_BUILD = '20260828j'; // bump to bust browser cache after deploy
+const OV_BUILD = '20260828k'; // bump to bust browser cache after deploy
 (function ovCacheBust() {
   try {
     const k = 'ov_build';
@@ -1790,16 +1790,20 @@ function shortAddr(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : ''; }
 // ── 3-LEVEL ADMIN MODERATION ──
 function ovAdminBtnHtml(memoryId, isHidden, isPerm) {
   const menuId = `ov-admin-menu-${memoryId}`;
+  // NOTE: every menu item MUST call event.stopPropagation() — the card wrapper has
+  // an onclick that navigates to the memory's page. Without stopPropagation the
+  // moderation click bubbles to the card, navigates away, and aborts the fetch
+  // (the "kicks me out + shows the item I'm removing" bug).
   const restoreItem = isHidden
-    ? `<button class="admin-mod-item restore" onclick="ovAdminAct('restore',${memoryId})">✅ Restore (Unhide)</button>`
+    ? `<button class="admin-mod-item restore" onclick="event.stopPropagation();ovAdminAct('restore',${memoryId})">✅ Restore (Unhide)</button>`
     : '';
   const hideItem = !isHidden
-    ? `<button class="admin-mod-item" onclick="ovAdminAct('hide',${memoryId})">🚫 Temp Hide</button>`
+    ? `<button class="admin-mod-item" onclick="event.stopPropagation();ovAdminAct('hide',${memoryId})">🚫 Temp Hide</button>`
     : '';
   const permItem = !isPerm
-    ? `<button class="admin-mod-item" onclick="ovAdminAct('perm',${memoryId})">❌ Perm Remove</button>`
+    ? `<button class="admin-mod-item" onclick="event.stopPropagation();ovAdminAct('perm',${memoryId})">❌ Perm Remove</button>`
     : '';
-  const banItem = `<button class="admin-mod-item" onclick="ovAdminAct('ban',${memoryId})">🔨 Ban + Remove</button>`;
+  const banItem = `<button class="admin-mod-item" onclick="event.stopPropagation();ovAdminAct('ban',${memoryId})">🔨 Ban + Remove</button>`;
   return `<div class="admin-mod-wrap">
     <button class="chain-link-btn" style="background:rgba(232,82,82,0.15);border:1px solid #e85252;color:#e85252" onclick="event.stopPropagation();ovAdminMenu('${menuId}')">🛡️ Mod ▾</button>
     <div class="admin-mod-menu hidden" id="${menuId}">
