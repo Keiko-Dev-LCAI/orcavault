@@ -505,6 +505,10 @@ footer a{color:var(--gold);text-decoration:none}
 .admin-mod-menu{position:fixed;margin:0;background:var(--bg2);border:1.5px solid rgba(232,82,82,0.5);border-radius:10px;overflow:visible;z-index:2000;min-width:200px;max-width:min(280px,calc(100vw - 24px));box-shadow:0 8px 28px rgba(0,0,0,0.55)}
 .admin-mod-menu.open-left{left:auto;right:0}
 .admin-mod-menu.hidden{display:none}
+/* While a mod menu is open, kill the card hover-transform. A transformed ancestor
+   becomes the containing block for position:fixed children, so the toggling hover
+   transform made the fixed menu jump/vanish when the cursor left the card. */
+body.mod-menu-open .memory-card:hover,body.mod-menu-open .vault-card:hover{transform:none}
 .admin-mod-item{display:block;width:100%;padding:12px 16px;border:none;background:transparent;color:var(--text);font-size:16px;font-weight:700;cursor:pointer;text-align:left;font-family:inherit;transition:background .12s;white-space:nowrap}
 .admin-mod-item:hover{background:rgba(232,82,82,0.15)}
 .admin-mod-item.restore{color:var(--green)}
@@ -1449,7 +1453,7 @@ const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small
 const ERC8004_REPUTATION_REGISTRY = '0x62e7E1502Ef822FBfb66554f072b46DF8A8c08D0';
 const ERC8004_AGENT_ID = 1;
 const ERC8004_AGENT_OWNER = '0xBF78164b6626ea8096C4B6b268b0b70f86f66893';
-const OV_BUILD = '20260828h'; // bump to bust browser cache after deploy
+const OV_BUILD = '20260828i'; // bump to bust browser cache after deploy
 (function ovCacheBust() {
   try {
     const k = 'ov_build';
@@ -1809,7 +1813,12 @@ function ovAdminMenu(menuId) {
   const menu = document.getElementById(menuId);
   if (!menu) return;
   menu.classList.toggle('hidden');
-  if (!menu.classList.contains('hidden')) {
+  const isOpen = !menu.classList.contains('hidden');
+  // Toggle a body flag that disables the card hover-transform while the menu is
+  // open — otherwise the transformed card becomes the fixed menu's containing
+  // block and the menu jumps away as soon as the cursor leaves the card.
+  document.body.classList.toggle('mod-menu-open', isOpen);
+  if (isOpen) {
     // Position as a fixed overlay anchored to the Mod button, so the menu
     // escapes the .memory-card overflow:hidden that was clipping the options.
     const btn = menu.parentElement.querySelector('.chain-link-btn');
@@ -1828,8 +1837,9 @@ function ovAdminMenu(menuId) {
   }
   setTimeout(() => {
     function outsideClose(e) {
-      if (!e.target.closest('.admin-mod-wrap')) {
+      if (!e.target.closest('.admin-mod-wrap') && !e.target.closest('.admin-mod-menu')) {
         document.querySelectorAll('.admin-mod-menu').forEach(m => m.classList.add('hidden'));
+        document.body.classList.remove('mod-menu-open');
         document.removeEventListener('click', outsideClose);
       }
     }
@@ -1841,6 +1851,7 @@ async function ovAdminAct(action, memoryId) {
   if (!isAdmin) return;
   // Close any open menus
   document.querySelectorAll('.admin-mod-menu').forEach(m => m.classList.add('hidden'));
+  document.body.classList.remove('mod-menu-open');
   if (!_ovAdminKey) {
     _ovAdminKey = prompt('Admin key:');
     if (!_ovAdminKey) return;
