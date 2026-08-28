@@ -3809,18 +3809,27 @@ def orcavault_hide_vault():
         wallet = (body.get('wallet') or '').strip().lower()
         signature = (body.get('signature') or '').strip()
         timestamp = str(body.get('timestamp') or '').strip()
-        if not wallet or not signature or not timestamp:
-            return jsonify({'error': 'wallet signature required (or adminKey)'}), 401
-        expected = (
+        # Prefer the exact message the client signed (same pattern as creator-delete /
+        # set-visibility). Fall back to reconstructing it if message is omitted.
+        message = (body.get('message') or '').strip() or (
             f"Hide OrcaVault archive\nVault ID: {vault_id}\n"
             f"Wallet: {wallet}\nTimestamp: {timestamp}"
         )
+        if not wallet or not signature:
+            return jsonify({'error': 'wallet signature required (or adminKey)'}), 401
+        # Soft-validate the signed text so a random signature can't hide arbitrary vaults
+        if f"Vault ID: {vault_id}" not in message or f"Wallet: {wallet}" not in message:
+            return jsonify({'error': 'Signed message does not match vault/wallet'}), 401
         try:
+            # Match creator-delete: recover against the message that was actually signed
             recovered = Account.recover_message(
-                encode_defunct(text=expected), signature=signature
+                encode_defunct(text=message), signature=signature
             ).lower()
             if recovered != wallet:
-                return jsonify({'error': 'Signature does not match wallet'}), 401
+                return jsonify({
+                    'error': 'Signature does not match wallet',
+                    'recovered': recovered[:10] + '…',
+                }), 401
         except Exception as e:
             return jsonify({'error': f'Signature error: {e}'}), 401
         # Owner check: VaultCreated owner on V1 or V2

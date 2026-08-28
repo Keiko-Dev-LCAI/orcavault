@@ -1417,7 +1417,7 @@ const streamPrewarm  = new Set();
 const UPLOAD_PIECE_SIZE = 16 * 1024 * 1024; // 16 MB wire pieces (LightTube-proven)
 const UPLOAD_PARALLEL   = 4;
 const JOB_UPLOAD_MIN_BYTES = 5 * 1024 * 1024; // large media → job path; small stays on /api/relay-upload (MCP)
-const OV_BUILD = '20260828c'; // bump to bust browser cache after deploy
+const OV_BUILD = '20260828d'; // bump to bust browser cache after deploy
 (function ovCacheBust() {
   try {
     const k = 'ov_build';
@@ -3033,19 +3033,22 @@ async function hideArchiveFromList(vaultId, name) {
   const label = name || ('Archive #' + vaultId);
   if (!confirm('Remove "' + label + '" from My Archives?\n\nThis hides it in the app (does not erase on-chain data). You can ask an admin to restore later if needed.')) return;
   try {
-    const timestamp = Date.now().toString();
-    const message = `Hide OrcaVault archive\nVault ID: ${vaultId}\nWallet: ${wallet.toLowerCase()}\nTimestamp: ${timestamp}`;
     const s = signer || (provider ? await provider.getSigner() : null);
     if (!s) throw new Error('No signer');
+    // Use the address the wallet actually signs with (not a stale global), same as creator-delete
+    const signerAddr = (await s.getAddress()).toLowerCase();
+    const timestamp = Date.now().toString();
+    const message = `Hide OrcaVault archive\nVault ID: ${vaultId}\nWallet: ${signerAddr}\nTimestamp: ${timestamp}`;
     const signature = await s.signMessage(message);
     const body = {
       vaultId: String(vaultId),
-      wallet: wallet.toLowerCase(),
-      signature,
+      wallet: signerAddr,
+      signature: typeof signature === 'string' ? signature : (signature.serialized || String(signature)),
       timestamp,
       message,
     };
-    if (_ovAdminKey) body.adminKey = _ovAdminKey;
+    // Only send adminKey if it unlocks the admin path — a stale/wrong key must not
+    // interfere with the owner-signature path (server ignores bad keys safely, but be clean).
     const res = await fetch(`${RELAY_URL}/api/orcavault/hide-vault`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
