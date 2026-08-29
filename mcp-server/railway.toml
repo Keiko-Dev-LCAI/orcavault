@@ -1,0 +1,6 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "MCP_TRANSPORT=sse HOST=0.0.0.0 python orcavault_mcp.py"
+restartPolicyType = "ON_FAILURE"

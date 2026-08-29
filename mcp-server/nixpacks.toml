@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python311", "gcc"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "MCP_TRANSPORT=sse HOST=0.0.0.0 python orcavault_mcp.py"
