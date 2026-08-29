@@ -1,5 +1,5 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/server.json/2025-12-11.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Keiko-Dev-LCAI/orcavault-mcp",
   "title": "OrcaVault",
   "description": "Permanent on-chain memory for AI agents on Lightchain via a one-time unlock.",
