@@ -23,6 +23,28 @@
     "feeLCAI": 2,
     "note": "One-time unlock via /api/register-payment after native LCAI transfer to payment address"
   },
+  "paymentOptions": [
+    {
+      "token": "native LCAI",
+      "chainId": 9200,
+      "network": "Lightchain AI Mainnet",
+      "address": "0xbb0ab4c9E15a20661CA0C4d2b6f5D32A7EdF7646",
+      "amount": 2,
+      "active": true,
+      "note": "One-time unlock via /api/register-payment after native LCAI transfer to payment address"
+    },
+    {
+      "token": "USDC (bridged)",
+      "chainId": 9200,
+      "network": "Lightchain AI Mainnet",
+      "address": "0xbb0ab4c9E15a20661CA0C4d2b6f5D32A7EdF7646",
+      "tokenAddress": null,
+      "amount": 1,
+      "decimals": 6,
+      "active": false,
+      "note": "Ethereum-side agents can pay in USDC bridged to Lightchain via the Hyperlane warp route, then call /api/register-payment with the token transfer tx hash. Activates once the USDC warp route is deployed and tokenAddress is published."
+    }
+  ],
   "x402Support": false,
   "active": true,
   "registrations": [

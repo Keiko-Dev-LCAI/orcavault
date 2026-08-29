@@ -83,6 +83,17 @@ OV_REPAIR_CACHE_DIR        = os.environ.get("OV_REPAIR_CACHE_DIR", "/data/ov_rep
 ERC8004_VALIDATION_REGISTRY = os.environ.get("ERC8004_VALIDATION_REGISTRY", "0x4F880C5b75102620f70CB010f8d776538a340b49")
 ERC8004_AGENT_ID            = int(os.environ.get("ERC8004_AGENT_ID", "1"))
 ORCAVAULT_AGENT_PRIVATE_KEY = os.environ.get("ORCAVAULT_AGENT_PRIVATE_KEY", "")
+# ── USDC payment path (bridged synthetic ERC-20 via Hyperlane warp route) ─────
+# OPTIONAL alternative rail to the native-LCAI paywall. Lets an Ethereum-side
+# agent pay in bridged USDC held on Lightchain. Cleanly DISABLED (LCAI-only)
+# until ORCAVAULT_USDC_TOKEN_ADDRESS is set — nothing breaks when it is empty.
+# USDC on Lightchain is a SYNTHETIC ERC-20, so this path watches the token
+# CONTRACT's Transfer event, NOT the native balance.
+ORCAVAULT_USDC_TOKEN_ADDRESS = os.environ.get("ORCAVAULT_USDC_TOKEN_ADDRESS", "").strip()
+ORCAVAULT_USDC_AMOUNT        = float(os.environ.get("ORCAVAULT_USDC_AMOUNT", "1.0"))   # required USDC per unlock
+ORCAVAULT_USDC_DECIMALS      = int(os.environ.get("ORCAVAULT_USDC_DECIMALS", "6"))     # canonical USDC = 6
+# keccak256("Transfer(address,address,uint256)")
+_ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 LT_STREAM_CACHE_DIR      = os.environ.get("LT_STREAM_CACHE_DIR", "/data/lt_stream_cache")
 OV_STREAM_CACHE_DIR      = os.environ.get("OV_STREAM_CACHE_DIR", "/data/ov_stream_cache")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
@@ -2605,7 +2616,70 @@ def check_access():
         'paused':         fee is None,
         'relay_wallet':   relay.address,
         'relay_balance':  balance_lcai,
+        # USDC alternative rail — present only when enabled (token address set).
+        'usdc_enabled':   bool(ORCAVAULT_USDC_TOKEN_ADDRESS),
+        'usdc_amount':    ORCAVAULT_USDC_AMOUNT if ORCAVAULT_USDC_TOKEN_ADDRESS else None,
+        'usdc_token':     ORCAVAULT_USDC_TOKEN_ADDRESS or None,
     })
+
+def _hx(x):
+    """Normalize a web3 HexBytes / str topic-or-data value to a 0x-prefixed lowercase hex string."""
+    h = x.hex() if hasattr(x, 'hex') else str(x)
+    h = h.lower()
+    return h if h.startswith('0x') else '0x' + h
+
+
+def _verify_usdc_payment(tx_hash, wallet_address, relay_address):
+    """
+    Verify a bridged-USDC (synthetic ERC-20) payment as an ALTERNATIVE to the
+    native-LCAI paywall. Returns (ok: bool, err: str|None).
+
+    Watches the token CONTRACT's Transfer event (NOT native value): requires a
+    Transfer of >= ORCAVAULT_USDC_AMOUNT USDC from the caller's wallet to the
+    relay wallet, emitted by the configured USDC token contract.
+
+    Cleanly disabled (ok=False) whenever ORCAVAULT_USDC_TOKEN_ADDRESS is unset.
+    """
+    if not ORCAVAULT_USDC_TOKEN_ADDRESS:
+        return False, 'USDC payments are not enabled'
+    try:
+        token_addr = Web3.to_checksum_address(ORCAVAULT_USDC_TOKEN_ADDRESS)
+    except Exception:
+        return False, 'USDC token address is misconfigured'
+
+    try:
+        receipt = w3.eth.get_transaction_receipt(tx_hash)
+    except Exception:
+        return False, 'Transaction not found on chain — wait a moment and try again'
+    if receipt is None:
+        return False, 'Transaction not yet mined — wait a moment and try again'
+    if receipt.get('status', 1) == 0:
+        return False, 'Transaction failed on chain'
+
+    need_units = int(round(ORCAVAULT_USDC_AMOUNT * (10 ** ORCAVAULT_USDC_DECIMALS)))
+    want_from  = wallet_address.lower()
+    want_to    = relay_address.lower()
+
+    for log in receipt.get('logs', []):
+        try:
+            if Web3.to_checksum_address(log['address']) != token_addr:
+                continue
+            topics = log['topics']
+            if len(topics) < 3:
+                continue
+            if _hx(topics[0]) != _ERC20_TRANSFER_TOPIC:
+                continue
+            from_addr = '0x' + _hx(topics[1])[-40:]
+            to_addr   = '0x' + _hx(topics[2])[-40:]
+            value     = int(_hx(log['data']), 16)
+            if from_addr == want_from and to_addr == want_to and value >= need_units:
+                return True, None
+        except Exception:
+            continue
+
+    return False, (f"No USDC transfer of >= {ORCAVAULT_USDC_AMOUNT} USDC "
+                   f"to the relay wallet was found in this transaction")
+
 
 @app.route('/api/register-payment', methods=['POST'])
 def register_payment():
@@ -2635,29 +2709,44 @@ def register_payment():
     if has_relay_access(wallet_address):
         return jsonify({'success': True, 'message': 'Already has relay access', 'tier': 'owner' if wallet_address.lower() in OWNER_WALLETS else 'paid'})
 
-    # Look up the transaction on-chain
+    # ── Path 1: native-LCAI payment to the relay wallet (existing paywall) ──
+    # Unchanged behaviour: tx.from == wallet, tx.to == relay, tx.value >= fee.
+    lcai_ok  = False
+    lcai_err = None
     try:
         tx = w3.eth.get_transaction(tx_hash)
     except Exception:
-        return jsonify({'error': 'Transaction not found on chain — wait a moment and try again'}), 404
+        tx = None
 
-    # Verify: sent from the right wallet
-    if tx['from'].lower() != wallet_address.lower():
-        return jsonify({'error': 'Transaction was not sent from your wallet address'}), 400
+    if tx is None:
+        lcai_err = 'Transaction not found on chain — wait a moment and try again'
+    elif tx['from'].lower() != wallet_address.lower():
+        lcai_err = 'Transaction was not sent from your wallet address'
+    elif tx.get('to') and tx['to'].lower() == relay.address.lower():
+        # This is a native transfer aimed at the relay wallet — apply the LCAI paywall.
+        relay_balance = float(w3.from_wei(w3.eth.get_balance(relay.address), 'ether'))
+        fee = current_fee_lcai(relay_balance)
+        if fee is None:
+            return jsonify({'error': 'New registrations temporarily paused — relay wallet is being refilled. Try again soon.'}), 503
+        fee_wei = Web3.to_wei(fee, 'ether')
+        if tx['value'] >= fee_wei:
+            lcai_ok = True
+        else:
+            paid_lcai = float(w3.from_wei(tx['value'], 'ether'))
+            lcai_err = f"Payment too small: sent {paid_lcai:.4f} LCAI, required {fee} LCAI"
+    # else: not a native-to-relay tx — could be a USDC token transfer; fall through.
 
-    # Verify: sent to the relay wallet
-    if tx.get('to', '').lower() != relay.address.lower():
-        return jsonify({'error': f"Transaction was not sent to the relay wallet ({relay.address})"}), 400
+    # ── Path 2: bridged-USDC (synthetic ERC-20) payment — alternative rail ──
+    # Only tried when the LCAI path did not succeed AND USDC is enabled.
+    usdc_ok  = False
+    usdc_err = None
+    if not lcai_ok and ORCAVAULT_USDC_TOKEN_ADDRESS:
+        usdc_ok, usdc_err = _verify_usdc_payment(tx_hash, wallet_address, relay.address)
 
-    # Verify: amount >= fee (dynamic — based on relay balance right now)
-    relay_balance = float(w3.from_wei(w3.eth.get_balance(relay.address), 'ether'))
-    fee = current_fee_lcai(relay_balance)
-    if fee is None:
-        return jsonify({'error': 'New registrations temporarily paused — relay wallet is being refilled. Try again soon.'}), 503
-    fee_wei = Web3.to_wei(fee, 'ether')
-    if tx['value'] < fee_wei:
-        paid_lcai = float(w3.from_wei(tx['value'], 'ether'))
-        return jsonify({'error': f"Payment too small: sent {paid_lcai:.4f} LCAI, required {fee} LCAI"}), 400
+    if not (lcai_ok or usdc_ok):
+        # Surface the most specific reason we have.
+        msg = lcai_err or usdc_err or 'Payment could not be verified'
+        return jsonify({'error': msg}), 400
 
     # All good — register the wallet
     paid = load_paid_wallets()
@@ -2665,9 +2754,10 @@ def register_payment():
     save_paid_wallets(paid)
 
     return jsonify({
-        'success': True,
-        'message': f"Relay access unlocked for {wallet_address}",
-        'tier':    'paid',
+        'success':   True,
+        'message':   f"Relay access unlocked for {wallet_address}",
+        'tier':      'paid',
+        'paid_with': 'usdc' if (usdc_ok and not lcai_ok) else 'lcai',
     })
 
 
