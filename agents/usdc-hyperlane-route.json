@@ -1,0 +1,22 @@
+{
+  "routeId": "USDC/base-lightchainai",
+  "decimals": 6,
+  "symbol": "USDC",
+  "base": {
+    "chainId": 8453,
+    "canonicalUsdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "hypCollateral": "0x9F1ff33209424841dDCf780158F9Ecc37A0099F1",
+    "mailbox": "0xeA87ae93Fa0019a82A727bfd3eBd1cFCa8f64f1D",
+    "validatorAnnounce": "0x182E8d7c5F1B06201b102123FC7dF0EaeB445a7B"
+  },
+  "lightchainai": {
+    "chainId": 9200,
+    "syntheticUsdc": "0x1113E23397b4398eF1A46A9A7f27C2241527b003",
+    "mailbox": "0x142a9CEf00ACcAddB76283c49A1Bf37f20c1F00e",
+    "messageIdMultisigIsm": "0x639c854FeD1B9D057EAbd4AB99dABe0457C8F675",
+    "staticMessageIdMultisigIsmFactory": "0x0d4988ab77feCDab0B8b11694426dFc538084226"
+  },
+  "paymentReceiver": "0xbb0ab4c9E15a20661CA0C4d2b6f5D32A7EdF7646",
+  "validator": "0x676a7229411a543445a8E96ad6391cf82D35d93B",
+  "notes": "Synthetic uses MessageIdMultisigIsm (threshold 1) with the announced Base validator. Docker Hyperlane validator+relayer on the ops host auto-deliver Base→Lightchain. No private keys in this file."
+}
