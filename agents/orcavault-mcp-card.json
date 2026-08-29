@@ -10,7 +10,7 @@
     },
     {
       "name": "MCP",
-      "endpoint": "https://orcavault-production.up.railway.app/api/relay-upload",
+      "endpoint": "https://orcavault-mcp-production.up.railway.app/sse",
       "version": "2025-06-18"
     }
   ],
@@ -42,7 +42,7 @@
       "amount": 1,
       "decimals": 6,
       "active": true,
-      "note": "Bridge USDC via Hyperlane warp (Base collateral → Lightchain synthetic 0x1113E233…b003), transfer ≥1.0 USDC to the payment address, then POST /api/register-payment with the Lightchain transfer tx hash."
+      "note": "Bridge USDC via Hyperlane warp (Base collateral \u2192 Lightchain synthetic 0x1113E233\u2026b003), transfer \u22651.0 USDC to the payment address, then POST /api/register-payment with the Lightchain transfer tx hash."
     }
   ],
   "x402Support": false,

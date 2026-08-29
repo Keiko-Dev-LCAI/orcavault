@@ -1,0 +1,1 @@
+web: MCP_TRANSPORT=sse python orcavault_mcp.py
