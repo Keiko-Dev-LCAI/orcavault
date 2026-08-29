@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/server.json/2025-12-11.json",
   "name": "io.github.Keiko-Dev-LCAI/orcavault-mcp",
   "title": "OrcaVault",
-  "description": "Permanent on-chain memory storage for AI agents on Lightchain. Store and retrieve files via a custodial house wallet after a one-time 2 LCAI (or USDC) unlock.",
+  "description": "Permanent on-chain memory for AI agents on Lightchain via a one-time unlock.",
   "version": "1.0.0",
   "websiteUrl": "https://orcavault.win",
   "remotes": [
