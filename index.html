@@ -60,6 +60,7 @@ contract AudioVisualArchives {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
 :root {
+  --on-accent: #0a0f1e;
   --bg:       #0d0b18;
   --bg2:      #141124;
   --bg3:      #1c1930;
@@ -123,7 +124,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 
 /* ── LANDING ── */
 .hero{padding:70px 56px 50px;background:linear-gradient(160deg,#120e28 0%,#0d0b18 60%,#180d24 100%)}
-.hero-eyebrow{font-size:17px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--purple);margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.hero-eyebrow{font-size:17px;font-weight:700;letter-spacing:.12em;color:var(--purple);margin-bottom:16px;display:flex;align-items:center;gap:8px}
 .hero-title{font-size:52px;font-weight:900;line-height:1.1;color:var(--text);margin-bottom:20px;letter-spacing:-1px}
 .hero-title span{color:var(--gold)}
 .hero-tagline{font-size:24px;color:var(--muted);margin-bottom:40px;max-width:900px;line-height:1.6}
@@ -195,7 +196,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 
 /* ── SIDEBAR COMPONENTS ── */
 .sidebar-section{margin-bottom:28px}
-.sidebar-section-title{font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px}
+.sidebar-section-title{font-size:15px;font-weight:700;letter-spacing:.08em;color:var(--muted);margin-bottom:12px}
 .sidebar-vault-name{font-size:26px;font-weight:800;color:var(--text);margin-bottom:6px}
 .sidebar-template-badge{display:inline-block;font-size:17px;font-weight:600;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(232,184,75,.3);padding:6px 14px;border-radius:8px;margin-bottom:14px}
 .sidebar-desc{font-size:19px;color:var(--muted);line-height:1.65}
@@ -260,7 +261,7 @@ input[type=file]{display:none}
 .office-sheet-body td,.office-sheet-body th{border:1px solid #ccc;padding:4px 8px;white-space:nowrap}
 .memory-meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}
 .memory-meta-item{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
-.memory-meta-key{font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
+.memory-meta-key{font-size:15px;font-weight:700;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
 .memory-meta-val{font-size:19px;font-weight:600;color:var(--text)}
 
 /* ── MODAL ── */
@@ -311,21 +312,21 @@ footer a{color:var(--gold);text-decoration:none}
 /* ── RECOVERY INFO CARD ── */
 .recovery-section{padding:50px 56px;background:linear-gradient(135deg,rgba(155,127,232,0.07) 0%,rgba(232,184,75,0.06) 100%)}
 .recovery-card{background:var(--bg2);border:2px solid var(--gold);border-radius:14px;padding:18px 24px;max-width:100%;margin:0;position:relative;overflow:hidden}
-.recovery-card::before{content:'';position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,var(--gold),var(--purple),var(--gold));border-radius:0}
+.recovery-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--gold),var(--purple),var(--gold));border-radius:0}
 .recovery-card-title{font-size:20px;font-weight:900;color:var(--gold);margin-bottom:4px;line-height:1.2}
 .recovery-card-subtitle{font-size:16px;font-weight:600;color:var(--text);margin-bottom:10px}
 .recovery-card-body{font-size:16px;color:var(--text);line-height:1.6;margin-bottom:14px}
 .recovery-item{background:var(--bg4);border:1.5px solid var(--border);border-radius:14px;padding:18px 22px;margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .recovery-item-inner{flex:1;min-width:0}
-.recovery-item-label{font-size:18px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--gold);margin-bottom:8px}
+.recovery-item-label{font-size:18px;font-weight:800;letter-spacing:.07em;color:var(--gold);margin-bottom:8px}
 .recovery-item-value{font-size:19px;font-family:monospace;color:var(--green);word-break:break-all;line-height:1.6}
 .recovery-item-value-plain{font-size:21px;color:var(--text);font-weight:700;line-height:1.6}
 .recovery-copy-btn{background:var(--gold);color:#0d0b18;border:none;border-radius:9px;padding:14px 22px;font-size:18px;font-weight:800;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0;transition:opacity .15s;min-height:52px}
 .recovery-copy-btn:hover{opacity:.82}
-.recovery-note{font-size:21px;color:var(--text);line-height:1.75;background:rgba(155,127,232,0.09);border-radius:14px;padding:26px 30px;border-left:5px solid var(--purple);margin-top:24px}
+.recovery-note{font-size:21px;color:var(--text);line-height:1.75;background:rgba(155,127,232,0.09);border-radius:14px;padding:26px 30px;border-left: 2px solid var(--purple);margin-top:24px}
 .recovery-wallet-row{display:none}
 .recovery-wallet-row.visible{display:flex}
-.recovery-tag{display:inline-block;background:var(--gold);color:#0d0b18;font-size:14px;font-weight:800;padding:4px 12px;border-radius:6px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:16px;vertical-align:middle}
+.recovery-tag{display:inline-block;background:var(--gold);color:#0d0b18;font-size:14px;font-weight:800;padding:4px 12px;border-radius:6px;letter-spacing:.07em;margin-bottom:16px;vertical-align:middle}
 @media(max-width:900px){
   .recovery-section{padding:36px 20px}
   .recovery-card{padding:14px 16px}
@@ -487,7 +488,7 @@ footer a{color:var(--gold);text-decoration:none}
 .cat-btn.active{background:var(--gold);color:#0d0b18;border-color:var(--gold)}
 .browse-grid-wrap{padding:12px 56px 8px}
 #browse-content .memory-thumb,#browse-content .memory-thumb-placeholder{height:150px}
-.browse-grid-title{font-size:24px;font-weight:800;color:var(--muted);margin-bottom:18px;text-transform:uppercase;letter-spacing:.06em}
+.browse-grid-title{font-size:24px;font-weight:800;color:var(--muted);margin-bottom:18px;letter-spacing:.06em}
 .browse-section{margin-bottom:48px}
 .browse-empty{text-align:center;padding:80px 40px;color:var(--muted);font-size:22px}
 @media(max-width:700px){.browse-hero{padding:32px 20px 24px}.browse-cats{padding:0 14px 18px;gap:8px}.browse-grid-wrap{padding:24px 14px 40px}.cat-btn{padding:9px 16px;font-size:16px}}
@@ -496,7 +497,7 @@ footer a{color:var(--gold);text-decoration:none}
 .upload-warn-modal{background:var(--bg2);border:2px solid var(--red);border-radius:20px;padding:36px;max-width:560px;width:100%;max-height:92vh;overflow-y:auto}
 .upload-warn-icon{font-size:56px;text-align:center;margin-bottom:16px}
 .upload-warn-title{font-size:28px;font-weight:900;color:var(--red);text-align:center;margin-bottom:8px}
-.upload-warn-body{font-size:18px;color:var(--text);line-height:1.7;margin-bottom:20px;background:rgba(232,82,82,0.06);border-radius:12px;padding:18px 20px;border-left:4px solid var(--red)}
+.upload-warn-body{font-size:18px;color:var(--text);line-height:1.7;margin-bottom:20px;background:rgba(232,82,82,0.06);border-radius:12px;padding:18px 20px;border-left: 2px solid var(--red)}
 .upload-warn-checks{display:flex;flex-direction:column;gap:14px;margin-bottom:24px}
 .upload-warn-check{display:flex;align-items:flex-start;gap:12px;font-size:18px;color:var(--text);cursor:pointer;line-height:1.55}
 .upload-warn-check input{width:22px;height:22px;flex-shrink:0;margin-top:2px;accent-color:var(--red);cursor:pointer}
@@ -707,7 +708,7 @@ body.mod-menu-open .memory-card:hover,body.mod-menu-open .vault-card:hover{trans
       <h2 class="recovery-card-title" style="font-size:28px;margin-bottom:8px">🔐 Your Time Capsule is Forever</h2>
       <p class="recovery-card-subtitle" style="margin-bottom:12px">Even if this website disappears — your memories live on the blockchain forever. Save these 3 things now so you can always find them.</p>
 
-      <div style="font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px">What you need to save:</div>
+      <div style="font-size:17px;font-weight:800;letter-spacing:.02em;color:var(--muted);margin-bottom:10px">What you need to save:</div>
 
       <!-- Item 1: Contract address -->
       <div class="recovery-item">
