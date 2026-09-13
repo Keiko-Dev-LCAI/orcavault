@@ -50,6 +50,7 @@ contract AudioVisualArchives {
 }
 -->
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.umd.min.js"></script>
+<script src="keiko-pay.js"></script>
 <script type="module">
   try {
     const { EthereumProvider } = await import('https://esm.sh/@walletconnect/ethereum-provider@2.17.3');
@@ -1101,7 +1102,8 @@ body.mod-menu-open .memory-card:hover,body.mod-menu-open .vault-card:hover{trans
     <div class="modal-title">Unlock One-Click Uploads</div>
     <div class="modal-sub"><strong>One payment. Upload forever.</strong> Pay a one-time <span id="relay-unlock-fee-display">2</span> LCAI and every future upload is one click — no wallet confirmations on any file, ever again.</div>
     <div id="relay-unlock-hint" style="font-size:16px;color:var(--muted);margin:8px 0 16px;line-height:1.6"></div>
-    <button class="btn btn-gold" id="btn-relay-pay" onclick="payRelayUnlock()" style="width:100%;justify-content:center;min-height:58px;font-size:20px;margin-bottom:14px">⚡ Pay <span id="relay-pay-fee-label">2</span> LCAI to Unlock</button>
+    <button class="btn btn-gold" id="btn-relay-pay" onclick="payRelayUnlock()" style="width:100%;justify-content:center;min-height:58px;font-size:20px;margin-bottom:10px">⚡ Pay <span id="relay-pay-fee-label">2</span> LCAI to Unlock</button>
+    <button class="btn btn-outline" id="btn-relay-pay-keiko" onclick="payRelayUnlockKeiko()" style="width:100%;justify-content:center;min-height:48px;font-size:16px;margin-bottom:14px;display:none;border-color:var(--gold);color:var(--gold)">💜 Pay with KEIKO (save ~20%) — <span id="relay-keiko-amount-label">200</span> KEIKO</button>
     <div style="display:flex;gap:12px;margin-bottom:8px">
       <button class="btn btn-outline" onclick="document.getElementById('modal-relay-unlock').classList.add('hidden')" style="flex:1;justify-content:center">Cancel</button>
     </div>
@@ -1504,6 +1506,7 @@ let relayAccess     = false;   // has relay access (owner or paid)
 let relayTier       = 'none';  // 'owner' | 'paid' | 'none'
 let relayFee        = null;    // current signup fee in LCAI (null = paused)
 let relayWalletAddr = '';      // relay wallet address (for payment instructions)
+let relayKeikoCfg   = null;    // {enabled, amount, receive, token} from check-access
 let readContractV3  = null;    // read-only V3 contract
 
 // ── ADMIN / MODERATION STATE ──
@@ -1760,7 +1763,7 @@ async function disconnectWallet() {
 
   wallet = null; provider = null; signer = null; contract = null; contractV2 = null; contractV3 = null;
   if (_wcProv) { try { _wcProv.disconnect(); } catch {} _wcProv = null; }
-  relayAccess = false; relayTier = 'none'; relayFee = null; relayWalletAddr = '';
+  relayAccess = false; relayTier = 'none'; relayFee = null; relayWalletAddr = ''; relayKeikoCfg = null;
   isAdmin = false; _ovAdminKey = null;
   _browseAllMemories = null; // force Browse reload so flagged items are hidden again after log-off
   const bc = document.getElementById('btn-connect'); if (bc) bc.style.display = '';
@@ -3208,6 +3211,40 @@ async function payRelayUnlock() {
   }
 }
 
+/** Pay with KEIKO (ERC-20) for the same forever relay unlock — ~20% under LCAI. */
+async function payRelayUnlockKeiko() {
+  const btn = document.getElementById('btn-relay-pay-keiko');
+  try {
+    if (!wallet) { showToast('Connect your wallet first', true); connectWallet(); return; }
+    if (typeof KeikoPay === 'undefined') { showToast('KEIKO pay helper not loaded', true); return; }
+    if (!relayKeikoCfg || !relayKeikoCfg.enabled) {
+      showToast('KEIKO payments are not enabled yet', true); return;
+    }
+    if (btn) btn.disabled = true;
+    showLoading('Paying with KEIKO…', 'Confirm the KEIKO transfer in your wallet (Ledger: confirm on device).');
+    const r = await KeikoPay.pay({
+      to: relayKeikoCfg.receive,
+      amount: relayKeikoCfg.amount,
+      verifyUrl: `${RELAY_URL}/api/register-payment`,
+      meta: { item: 'relay-unlock' },
+    });
+    if (!r.ok) throw new Error(r.error || 'KEIKO payment failed');
+    hideLoading();
+    relayAccess = true; relayTier = 'paid';
+    updateRelayUI();
+    document.getElementById('modal-relay-unlock').classList.add('hidden');
+    showToast('🎉 Unlocked with KEIKO! One-click uploads are on.');
+  } catch (e) {
+    hideLoading();
+    if (btn) btn.disabled = false;
+    const msg = (e && (e.shortMessage || e.message)) || String(e);
+    if (/reject|denied|4001/i.test(msg)) showToast('Payment cancelled.', true);
+    else showToast('KEIKO pay failed: ' + msg, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function goAddMemory() {
   if (!wallet) { showToast('Please connect your wallet first', true); connectWallet(); return; }
   const link = document.getElementById('add-mem-vault-link');
@@ -3801,6 +3838,12 @@ async function checkRelayAccess(walletAddr) {
     relayTier       = data.tier || 'none';
     relayFee        = data.fee_lcai;
     relayWalletAddr = data.relay_wallet || '';
+    relayKeikoCfg   = data.keiko_enabled ? {
+      enabled: true,
+      amount: data.keiko_amount,
+      receive: data.keiko_receive,
+      token: data.keiko_token,
+    } : null;
     updateRelayUI();
   } catch(e) {
     // silently ignore — relay is optional
@@ -4197,20 +4240,29 @@ function showRelayUnlockModal() {
   const payLbl   = document.getElementById('relay-pay-fee-label');
   const hint     = document.getElementById('relay-unlock-hint');
   const payBtn   = document.getElementById('btn-relay-pay');
+  const keikoBtn = document.getElementById('btn-relay-pay-keiko');
+  const keikoAmt = document.getElementById('relay-keiko-amount-label');
   if (walletEl) walletEl.textContent = relayWalletAddr || 'Connect wallet first';
   if (feeEl)    feeEl.textContent    = fee;
   if (feeMan)   feeMan.textContent   = fee;
   if (payLbl)   payLbl.textContent   = fee;
+  if (keikoBtn) {
+    const showKeiko = !!(relayKeikoCfg && relayKeikoCfg.enabled && relayKeikoCfg.receive && relayKeikoCfg.amount);
+    keikoBtn.style.display = showKeiko ? '' : 'none';
+    if (keikoAmt && relayKeikoCfg) keikoAmt.textContent = relayKeikoCfg.amount;
+  }
   if (!wallet) {
     if (hint) hint.textContent = 'Connect your wallet first, then you can pay in one tap.';
     if (payBtn) { payBtn.disabled = true; payBtn.textContent = '🔌 Connect wallet to pay'; payBtn.onclick = () => { document.getElementById('modal-relay-unlock').classList.add('hidden'); connectWallet(); }; }
+    if (keikoBtn) keikoBtn.disabled = true;
   } else {
-    if (hint) hint.textContent = `You'll need ${fee} LCAI in your connected wallet. One approval unlocks forever.`;
+    if (hint) hint.textContent = `You'll need ${fee} LCAI in your connected wallet (or pay with KEIKO for ~20% off). One approval unlocks forever.`;
     if (payBtn) {
       payBtn.disabled = false;
       payBtn.innerHTML = `⚡ Pay <span id="relay-pay-fee-label">${fee}</span> LCAI to Unlock`;
       payBtn.onclick = payRelayUnlock;
     }
+    if (keikoBtn) keikoBtn.disabled = false;
   }
   document.getElementById('modal-relay-unlock').classList.remove('hidden');
 }

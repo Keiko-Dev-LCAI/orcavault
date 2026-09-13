@@ -94,6 +94,15 @@ ORCAVAULT_USDC_AMOUNT        = float(os.environ.get("ORCAVAULT_USDC_AMOUNT", "1.
 ORCAVAULT_USDC_DECIMALS      = int(os.environ.get("ORCAVAULT_USDC_DECIMALS", "6"))     # canonical USDC = 6
 # keccak256("Transfer(address,address,uint256)")
 _ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+# ── KEIKO payment path (Filament ERC-20 on Lightchain) ───────────────────────
+# OPTIONAL third rail. Enabled when KEIKO_RECEIVE_WALLET is set (public address).
+# Users send KEIKO from their own wallet; we only verify the Transfer on-chain.
+import keiko_pay  # stdlib verifier next to this server
+KEIKO_RECEIVE_WALLET = os.environ.get("KEIKO_RECEIVE_WALLET", "").strip()
+KEIKO_PRICE          = float(os.environ.get("KEIKO_PRICE", "200"))  # ~20% under 2 LCAI
+_keiko_used = keiko_pay.UsedTxStore(
+    os.environ.get("KEIKO_USED_TX_FILE", "/data/keiko_used_tx.json")
+)
 LT_STREAM_CACHE_DIR      = os.environ.get("LT_STREAM_CACHE_DIR", "/data/lt_stream_cache")
 OV_STREAM_CACHE_DIR      = os.environ.get("OV_STREAM_CACHE_DIR", "/data/ov_stream_cache")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
@@ -2620,6 +2629,11 @@ def check_access():
         'usdc_enabled':   bool(ORCAVAULT_USDC_TOKEN_ADDRESS),
         'usdc_amount':    ORCAVAULT_USDC_AMOUNT if ORCAVAULT_USDC_TOKEN_ADDRESS else None,
         'usdc_token':     ORCAVAULT_USDC_TOKEN_ADDRESS or None,
+        # KEIKO alternative rail — present only when receive wallet is set.
+        'keiko_enabled':  bool(KEIKO_RECEIVE_WALLET),
+        'keiko_amount':   KEIKO_PRICE if KEIKO_RECEIVE_WALLET else None,
+        'keiko_token':    keiko_pay.KEIKO_TOKEN_ADDRESS if KEIKO_RECEIVE_WALLET else None,
+        'keiko_receive':  KEIKO_RECEIVE_WALLET or None,
     })
 
 def _hx(x):
@@ -2743,9 +2757,23 @@ def register_payment():
     if not lcai_ok and ORCAVAULT_USDC_TOKEN_ADDRESS:
         usdc_ok, usdc_err = _verify_usdc_payment(tx_hash, wallet_address, relay.address)
 
-    if not (lcai_ok or usdc_ok):
+    # ── Path 3: KEIKO ERC-20 payment — promo rail (~20% under LCAI) ──────────
+    keiko_ok  = False
+    keiko_err = None
+    if not (lcai_ok or usdc_ok) and KEIKO_RECEIVE_WALLET:
+        # Replay-protect per tx; access is still per-wallet once registered.
+        if _keiko_used.seen(tx_hash):
+            keiko_err = 'This KEIKO payment has already been used'
+        else:
+            keiko_ok, keiko_err = keiko_pay.verify_keiko_transfer(
+                tx_hash, wallet_address, KEIKO_RECEIVE_WALLET, KEIKO_PRICE
+            )
+            if keiko_ok:
+                _keiko_used.add(tx_hash)
+
+    if not (lcai_ok or usdc_ok or keiko_ok):
         # Surface the most specific reason we have.
-        msg = lcai_err or usdc_err or 'Payment could not be verified'
+        msg = lcai_err or usdc_err or keiko_err or 'Payment could not be verified'
         return jsonify({'error': msg}), 400
 
     # All good — register the wallet
@@ -2753,11 +2781,18 @@ def register_payment():
     paid.add(wallet_address.lower())
     save_paid_wallets(paid)
 
+    if keiko_ok and not lcai_ok and not usdc_ok:
+        paid_with = 'keiko'
+    elif usdc_ok and not lcai_ok:
+        paid_with = 'usdc'
+    else:
+        paid_with = 'lcai'
+
     return jsonify({
         'success':   True,
         'message':   f"Relay access unlocked for {wallet_address}",
         'tier':      'paid',
-        'paid_with': 'usdc' if (usdc_ok and not lcai_ok) else 'lcai',
+        'paid_with': paid_with,
     })
 
 
