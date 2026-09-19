@@ -4749,7 +4749,11 @@ def _do_lighttunes_upload(job_id, user_wallet, title, artist, genre, description
 def lighttunes_fee():
     """Return current upload fee in LCAI and USD."""
     price = _get_lcai_price_usd()
-    fee_lcai = round(LIGHTTUNES_FEE_USD / price, 2) if price > 0 else None
+    # LIGHTTUNES_FEE_USD=0 (Railway env) = promo free upload; restore 0.50 on Oct 1.
+    if LIGHTTUNES_FEE_USD <= 0:
+        fee_lcai = 0.0
+    else:
+        fee_lcai = round(LIGHTTUNES_FEE_USD / price, 2) if price > 0 else None
     return jsonify({
         'fee_usd':    LIGHTTUNES_FEE_USD,
         'fee_lcai':   fee_lcai,
@@ -4795,8 +4799,11 @@ def lighttunes_upload():
     if user_wallet.lower() in get_lt_banned_wallets():
         return jsonify({'error': 'Wallet is banned from LightTunes'}), 403
 
-    # ── Fee verification (skip for owner wallets) ────────────────────────────
-    if user_wallet.lower() not in OWNER_WALLETS:
+    # ── Fee verification (skip when promo fee is 0, and for owner wallets) ──
+    # Oct 1 revert: set Railway LIGHTTUNES_FEE_USD back to 0.50 (this skip stays valid).
+    if LIGHTTUNES_FEE_USD <= 0:
+        payment_tx = ''  # free upload — do not require a fee tx
+    elif user_wallet.lower() not in OWNER_WALLETS:
         if not LIGHTTUNES_FEE_WALLET:
             return jsonify({'error': 'Upload fee not configured — contact admin'}), 503
         if not payment_tx:
