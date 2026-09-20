@@ -42,10 +42,11 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(64 * 1024 * 1024)))  # 64 MB (16 MB pieces + form)
 # Scoped CORS — override with CORS_ORIGINS env (comma-separated)
 _CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "CORS_ORIGINS",
-    "https://orcavault.win,https://lighttube.win,http://localhost:5000,http://127.0.0.1:5000"
+    "https://orcavault.win,https://lighttube.win,https://www.lighttube.win,https://lighttunes.win,http://localhost:5000,http://127.0.0.1:5000"
 ).split(",") if o.strip()]
 CORS(app, origins=_CORS_ORIGINS)
 
@@ -132,7 +133,12 @@ _nonce_lock = threading.Lock()
 # Only one LightTube blockchain job (upload or repair) at a time on the relay wallet.
 _relay_job_lock = threading.Lock()
 _ACTIVE_LT_JOB_STATUSES = frozenset({'receiving', 'initializing', 'repairing', 'uploading', 'pending'})
+# Only these hold the relay wallet/nonce. 'receiving' is HTTP piece ingest — must NOT
+# block other users' upload-init (abandoned tabs used to freeze the promo for 30 min).
+_LT_CHAIN_BUSY_STATUSES = frozenset({'initializing', 'repairing', 'uploading', 'pending'})
 _LT_JOB_STALE_SECS      = int(os.environ.get('LT_JOB_STALE_SECS', '1800'))  # 30 min
+_LT_RECEIVING_STALE_SECS = int(os.environ.get('LT_RECEIVING_STALE_SECS', '600'))  # 10 min
+_STREAM_ERROR_RETRY_SECS = int(os.environ.get('STREAM_ERROR_RETRY_SECS', '1800'))  # 30 min
 # Per-job locks so parallel upload-piece requests can seek/write safely
 _lt_piece_locks = {}
 _lt_piece_locks_guard = threading.Lock()
@@ -488,7 +494,8 @@ def _prune_stale_lt_jobs():
         if job.get('status') not in _ACTIVE_LT_JOB_STATUSES:
             continue
         started = job.get('started_at', 0)
-        if started and (now - started) < _LT_JOB_STALE_SECS:
+        limit = _LT_RECEIVING_STALE_SECS if job.get('status') == 'receiving' else _LT_JOB_STALE_SECS
+        if started and (now - started) < limit:
             continue
         job['status'] = 'error'
         job['error']  = 'Job cancelled (stale — relay cleared lock so you can retry)'
@@ -502,6 +509,15 @@ def _active_lt_job():
     _prune_stale_lt_jobs()
     for job in lt_upload_jobs.values():
         if job.get('status') in _ACTIVE_LT_JOB_STATUSES:
+            return job
+    return None
+
+
+def _active_lt_chain_job():
+    """True only when a job is actually using the relay wallet (not HTTP receiving)."""
+    _prune_stale_lt_jobs()
+    for job in lt_upload_jobs.values():
+        if job.get('status') in _LT_CHAIN_BUSY_STATUSES:
             return job
     return None
 
@@ -550,7 +566,7 @@ def _active_song_job():
 def _relay_blockchain_busy():
     """True when any LightTube, LightTunes, or OrcaVault job is using the relay wallet."""
     return (
-        _active_lt_job() is not None
+        _active_lt_chain_job() is not None
         or _active_song_job() is not None
         or _active_ov_job() is not None
     )
@@ -985,7 +1001,7 @@ def _assemble_lighttube_stream(version, video_id):
                 os.remove(tmp_path)
         except Exception:
             pass
-        _stream_set_build(key, status='error', error=str(e))
+        _stream_set_build(key, status='error', error=str(e), error_at=time.time())
         print(f"[stream] {key}: build failed — {e}")
 
 
@@ -1589,6 +1605,7 @@ def lighttube_upload_init():
         'file_size':       file_size,
         'started_at':      time.time(),
     }
+    print(f"[lt-upload] init job={job_id} pieces={total_pieces} size={file_size} piece_size={piece_size}")
     return jsonify({'jobId': job_id})
 
 
@@ -1662,6 +1679,7 @@ def lighttube_upload_piece():
         pieces_received = job['pieces_received']
         done = pieces_received >= job['total_pieces']
 
+        print(f"[lt-upload] piece job={job_id} idx={piece_index} bytes={len(data)} got={pieces_received}/{job['total_pieces']}")
         if done:
             repair_vid = job.get('repair_video_id')
             if repair_vid is not None and not job.get('from_cache'):
@@ -1992,7 +2010,17 @@ def lighttube_upload_progress(job_id):
     job = lt_upload_jobs.get(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
-    return jsonify(job)
+    # Never jsonify the raw job: pieces_got is a set (TypeError → 500, bar looks stuck).
+    got = job.get('pieces_got')
+    return jsonify({
+        'status':     job.get('status'),
+        'progress':   job.get('progress', 0),
+        'total':      job.get('total', 0),
+        'videoId':    job.get('videoId'),
+        'error':      job.get('error'),
+        'piecesReceived': len(got) if isinstance(got, (set, list)) else job.get('pieces_received', 0),
+        'totalPieces': job.get('total_pieces'),
+    })
 
 
 @app.route('/api/media/stream/lighttube/<version>/<int:video_id>/status', methods=['GET'])
@@ -2022,6 +2050,14 @@ def lighttube_stream_status(version, video_id):
                 'ready', total, total, meta.get('mime', 'video/mp4'), nbytes,
             ))
 
+        if build and build.get('status') == 'error':
+            err_at = float(build.get('error_at') or 0)
+            if err_at and (time.time() - err_at) < _STREAM_ERROR_RETRY_SECS:
+                return jsonify(_stream_status_payload(
+                    'error', build.get('progress', 0), int(build.get('total') or 0),
+                    build.get('mime', 'video/mp4'), build.get('bytes', nbytes),
+                    error=build.get('error', 'Build failed'),
+                )), 500
         if not build or build.get('status') not in ('building', 'ready', 'starting'):
             _ensure_stream_build_started(version, video_id)
             build = _stream_get_build(key) or {}
