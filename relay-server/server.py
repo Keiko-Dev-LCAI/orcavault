@@ -419,6 +419,87 @@ def save_thumbnail_github(filename, data_b64):
         result = json.loads(r.read())
         return f"https://raw.githubusercontent.com/{GITHUB_THUMB_REPO}/{GITHUB_THUMB_BRANCH}/thumbs/{filename}"
 
+
+def _lt_thumb_exists(version, video_id):
+    filename = f"{version}_{video_id}.jpg"
+    disk = os.path.join(LIGHTTUBE_THUMBS_DIR, filename)
+    if os.path.isfile(disk) and os.path.getsize(disk) > 500:
+        return True
+    url = f"https://raw.githubusercontent.com/{GITHUB_THUMB_REPO}/{GITHUB_THUMB_BRANCH}/thumbs/{filename}"
+    try:
+        req = urllib.request.Request(url, method='HEAD')
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return 200 <= r.status < 300
+    except Exception:
+        return False
+
+
+def _persist_lt_thumb_bytes(version, video_id, jpeg_bytes):
+    """Same store as POST /api/lighttube/set-thumbnail: disk + GitHub thumbs/."""
+    filename = f"{version}_{video_id}.jpg"
+    os.makedirs(LIGHTTUBE_THUMBS_DIR, exist_ok=True)
+    with open(os.path.join(LIGHTTUBE_THUMBS_DIR, filename), 'wb') as f:
+        f.write(jpeg_bytes)
+    if GITHUB_TOKEN:
+        save_thumbnail_github(filename, base64.b64encode(jpeg_bytes).decode())
+
+
+def _ffmpeg_frame_jpeg(src_path):
+    """Grab a 320×180 JPEG from 1s (or t=0). None if ffmpeg missing / black / fail."""
+    if not shutil.which('ffmpeg'):
+        print('[lt-thumb] ffmpeg not on PATH')
+        return None
+    if not src_path or not os.path.isfile(src_path) or os.path.getsize(src_path) < 100:
+        return None
+    fd, out = tempfile.mkstemp(suffix='.jpg')
+    os.close(fd)
+    try:
+        vf = 'scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2'
+        for ss in ('00:00:01', '0'):
+            cmd = [
+                'ffmpeg', '-y', '-ss', ss, '-i', src_path,
+                '-frames:v', '1', '-vf', vf, '-q:v', '4', out,
+            ]
+            r = subprocess.run(cmd, capture_output=True, timeout=45)
+            if r.returncode != 0 or not os.path.isfile(out):
+                continue
+            size = os.path.getsize(out)
+            if size < 2000:
+                continue
+            if ss == '00:00:01' and size < 5000:
+                continue  # likely near-black first second
+            with open(out, 'rb') as f:
+                return f.read()
+        if os.path.isfile(out) and os.path.getsize(out) > 500:
+            with open(out, 'rb') as f:
+                return f.read()
+        return None
+    except Exception as e:
+        print(f'[lt-thumb] ffmpeg failed: {e}')
+        return None
+    finally:
+        try:
+            os.unlink(out)
+        except Exception:
+            pass
+
+
+def _maybe_auto_thumb(version, video_id, src_path, client_supplied=False):
+    """Best-effort server thumbnail when the browser didn't send one. Never raises."""
+    if client_supplied:
+        return
+    try:
+        if _lt_thumb_exists(version, video_id):
+            return
+        jpeg = _ffmpeg_frame_jpeg(src_path)
+        if not jpeg:
+            print(f'[lt-thumb] no frame for {version}-{video_id}')
+            return
+        _persist_lt_thumb_bytes(version, video_id, jpeg)
+        print(f'[lt-thumb] auto {version}-{video_id} {len(jpeg)} bytes')
+    except Exception as e:
+        print(f'[lt-thumb] non-fatal {version}-{video_id}: {e}')
+
 # ─── LightTube relay upload ───────────────────────────────────────────────────
 
 def _mime_for_filename(fn):
@@ -998,6 +1079,13 @@ def _assemble_lighttube_stream(version, video_id):
         _stream_save_meta(meta_path, total_chunks, nbytes, mime_type)
         _stream_set_build(key, status='ready', progress=total_chunks, total=total_chunks, mime=mime_type, bytes=nbytes)
         print(f"[stream] {key}: ready ({nbytes:,} bytes)")
+        # Mobile uploads often send no client thumbnail — grab a frame from the assembled file.
+        try:
+            ver = key.split('-')[1] if key.startswith('lighttube-') else 'v3'
+            vid = key.split('-')[-1]
+            _maybe_auto_thumb(ver, vid, out_path, client_supplied=False)
+        except Exception as te:
+            print(f"[lt-thumb] stream-ready hook failed (non-fatal): {te}")
     except Exception as e:
         try:
             if os.path.isfile(tmp_path):
@@ -1886,6 +1974,9 @@ def _process_chunked_upload(job_id):
                             tf.write(base64.b64decode(thumb_data))
                 except Exception as te:
                     print(f"Thumbnail save failed (non-fatal): {te}")
+            else:
+                prefix = "v3" if LIGHTTUBE_V3_ADDRESS else "v2"
+                _maybe_auto_thumb(prefix, video_id, tmp_path, client_supplied=False)
 
             # ── addVideoChunkFor × N (adaptive parallel batches) ────────────
             _MAX_BATCH = 25
@@ -1930,6 +2021,13 @@ def _process_chunked_upload(job_id):
                         print(f"[chunked-upload] clean batch — stepping up to {batch_size} chunks/batch")
 
         job['status'] = 'complete'
+        try:
+            prefix = "v3" if LIGHTTUBE_V3_ADDRESS else "v2"
+            vid = job.get('videoId')
+            if vid is not None:
+                _maybe_auto_thumb(prefix, vid, tmp_path, client_supplied=bool(job.get('thumbnail')))
+        except Exception as te:
+            print(f"[lt-thumb] complete hook failed (non-fatal): {te}")
         try:
             os.unlink(tmp_path)
         except Exception:
