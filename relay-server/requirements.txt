@@ -6,3 +6,4 @@ gunicorn==22.0.0
 cryptography
 websocket-client
 requests
+imageio-ffmpeg

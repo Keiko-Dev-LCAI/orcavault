@@ -446,7 +446,14 @@ def _persist_lt_thumb_bytes(version, video_id, jpeg_bytes):
 
 def _ffmpeg_frame_jpeg(src_path):
     """Grab a 320×180 JPEG from 1s (or t=0). None if ffmpeg missing / black / fail."""
-    if not shutil.which('ffmpeg'):
+    ffmpeg_bin = shutil.which('ffmpeg')
+    if not ffmpeg_bin:
+        try:
+            import imageio_ffmpeg
+            ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg_bin = None
+    if not ffmpeg_bin:
         print('[lt-thumb] ffmpeg not on PATH')
         return None
     if not src_path or not os.path.isfile(src_path) or os.path.getsize(src_path) < 100:
@@ -457,7 +464,7 @@ def _ffmpeg_frame_jpeg(src_path):
         vf = 'scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2'
         for ss in ('00:00:01', '0'):
             cmd = [
-                'ffmpeg', '-y', '-ss', ss, '-i', src_path,
+                ffmpeg_bin, '-y', '-ss', ss, '-i', src_path,
                 '-frames:v', '1', '-vf', vf, '-q:v', '4', out,
             ]
             r = subprocess.run(cmd, capture_output=True, timeout=45)
