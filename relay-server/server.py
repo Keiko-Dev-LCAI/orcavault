@@ -402,6 +402,7 @@ def save_thumbnail_github(filename, data_b64):
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
         "Content-Type": "application/json",
+        "User-Agent": "orcavault-relay",
     }
     # Get existing SHA (needed for update)
     sha = None
