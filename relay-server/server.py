@@ -122,7 +122,10 @@ CHAIN_ID                 = 9200
 CHUNK_BATCH_SIZE         = int(os.environ.get("CHUNK_BATCH_SIZE", "20"))  # parallel on-chain chunk txs per batch
 # Lightchain RPC rejects txs whose gas*gasPrice exceeds this (default 1 LCAI).
 LT_TX_FEE_CAP_WEI        = int(os.environ.get("LT_TX_FEE_CAP_WEI", str(10**18)))
-LT_CHUNK_GAS_DEFAULT     = int(os.environ.get("LT_CHUNK_GAS_DEFAULT", "3000000"))
+# Fallback if estimate_gas fails. Must exceed Lightchain calldata floor (~4.6M for a
+# full 115KB chunk after EIP-7623-style floor data gas). Old 3M cap rejected real videos.
+LT_CHUNK_GAS_DEFAULT     = int(os.environ.get("LT_CHUNK_GAS_DEFAULT", "8000000"))
+LT_CHUNK_GAS_MAX         = int(os.environ.get("LT_CHUNK_GAS_MAX", "12000000"))
 # Original King Kong upload used 623214 wei gasPrice → ~0.0000014 LCAI/chunk.
 # Do NOT use w3.eth.gas_price (500 gwei) — that's ~1 LCAI/chunk and wrong for Lightchain.
 LT_CHUNK_GAS_PRICE_WEI   = int(os.environ.get("LT_CHUNK_GAS_PRICE_WEI", "1000000"))
@@ -1220,21 +1223,28 @@ def _cap_gas_price(gas_limit, gas_price):
     return min(int(gas_price), max_price)
 
 
+def _gas_with_buffer(est):
+    """estimate × 1.25 + 50k, never below estimate, never above MAX."""
+    buffered = int(est * 1.25) + 50_000
+    return min(max(buffered, int(est) + 1), LT_CHUNK_GAS_MAX)
+
+
 def _estimate_chunk_gas(w3_conn, contract, video_id, chunk_index, chunk_data, from_address):
-    """Estimate gas for one chunk; historical uploads use ~2.2M."""
+    """Estimate gas for one addVideoChunkFor; must clear calldata floor (~4.6M)."""
     try:
         built = contract.functions.addVideoChunkFor(
             video_id, chunk_index, chunk_data
         ).build_transaction({
             'from': from_address,
             'nonce': w3_conn.eth.get_transaction_count(from_address, 'latest'),
-            'gas': LT_CHUNK_GAS_DEFAULT,
-            'gasPrice': w3_conn.eth.gas_price,
+            'gas': LT_CHUNK_GAS_MAX,  # envelope must exceed floor or estimate_gas itself reverts
+            'gasPrice': _lcai_gas_price(),
             'chainId': CHAIN_ID,
         })
         est = w3_conn.eth.estimate_gas(built)
-        return min(int(est * 1.25) + 50_000, LT_CHUNK_GAS_DEFAULT)
-    except Exception:
+        return _gas_with_buffer(est)
+    except Exception as e:
+        print(f"[lt-gas] estimate failed, using default {LT_CHUNK_GAS_DEFAULT}: {e}")
         return LT_CHUNK_GAS_DEFAULT
 
 
@@ -1303,10 +1313,15 @@ def _do_lt_upload(job_id, user_wallet, title, description, category, data_uri, t
             ).build_transaction({
                 'from':     relay_acct.address,
                 'nonce':    nonce,
-                'gas':      300_000,
-                'gasPrice': w3.eth.gas_price,
+                'gas':      LT_CHUNK_GAS_DEFAULT,
+                'gasPrice': _lcai_gas_price(),
                 'chainId':  CHAIN_ID,
             })
+            try:
+                tx['gas'] = _gas_with_buffer(w3.eth.estimate_gas(tx))
+            except Exception:
+                tx['gas'] = 500_000
+            tx['gasPrice'] = _cap_gas_price(tx['gas'], _lcai_gas_price())
             signed  = w3.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
             tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
@@ -1824,8 +1839,6 @@ def _process_chunked_upload(job_id):
             title       = job['title']
             description = job['description']
             category    = job['category']
-            init_gas    = _cap_gas_price(300_000, _lcai_gas_price())
-
             with _nonce_lock:
                 nonce = w3_local.eth.get_transaction_count(relay_acct.address, 'pending')
                 tx = contract.functions.initVideoFor(
@@ -1833,10 +1846,15 @@ def _process_chunked_upload(job_id):
                 ).build_transaction({
                     'from':     relay_acct.address,
                     'nonce':    nonce,
-                    'gas':      300_000,
-                    'gasPrice': init_gas,
+                    'gas':      LT_CHUNK_GAS_DEFAULT,
+                    'gasPrice': _lcai_gas_price(),
                     'chainId':  CHAIN_ID,
                 })
+                try:
+                    tx['gas'] = _gas_with_buffer(w3_local.eth.estimate_gas(tx))
+                except Exception:
+                    tx['gas'] = 500_000
+                tx['gasPrice'] = _cap_gas_price(tx['gas'], _lcai_gas_price())
                 signed  = w3_local.eth.account.sign_transaction(tx, RELAY_PRIVATE_KEY)
                 tx_hash = w3_local.eth.send_raw_transaction(signed.raw_transaction)
             receipt = w3_local.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
@@ -2895,12 +2913,12 @@ def _estimate_ov_chunk_gas(w3_conn, contract, memory_id, chunk_index, chunk_data
         ).build_transaction({
             'from': from_address,
             'nonce': w3_conn.eth.get_transaction_count(from_address, 'latest'),
-            'gas': LT_CHUNK_GAS_DEFAULT,
-            'gasPrice': w3_conn.eth.gas_price,
+            'gas': LT_CHUNK_GAS_MAX,
+            'gasPrice': _lcai_gas_price(),
             'chainId': CHAIN_ID,
         })
         est = w3_conn.eth.estimate_gas(built)
-        return min(int(est * 1.25) + 50_000, LT_CHUNK_GAS_DEFAULT)
+        return _gas_with_buffer(est)
     except Exception:
         return LT_CHUNK_GAS_DEFAULT
 
