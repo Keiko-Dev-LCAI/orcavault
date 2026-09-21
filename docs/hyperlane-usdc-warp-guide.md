@@ -1,5 +1,7 @@
 # Build a Hyperlane USDC Warp Route (Base → your chain)
 
+Pretty print: **[PDF](hyperlane-usdc-warp-guide.pdf)** (same scrubbed content).
+
 A builder-facing guide to the payment rail ERC-8004 leaves out: a **self-hosted** Hyperlane warp route that locks real USDC on **Base** and mints synthetic USDC 1:1 on **your chain**. The worked example uses USDC → Lightchain, but any ERC-20 (or a native coin) and any Hyperlane-registered chain works.
 
 > **Read this first.** This is a route *you operate* — your own validator signs, your own relayer delivers. It is **not** Circle's official bridge and **not** a public one-click UI. The default security is **threshold-1** (a single validator whose key can authorize mints), so it is a single point of trust. Keep the agents online, protect the key, and add validators before calling it trustless. Liquidity is only whatever you bridge — this is working plumbing, not a market on-ramp.
