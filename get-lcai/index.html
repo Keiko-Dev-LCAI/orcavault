@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Get LCAI — buy &amp; bridge to native LCAI in one flow</title>
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#121620; --card:#151a26; --border:#232a3a;
+    --text:#eef2f8; --muted:#9aa6b8; --gold:#e8b84b; --cyan:#39d0d8;
+    --green:#3ddc84; --red:#e85252; --purple:#9b7fe8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#16203a 0%,var(--bg) 55%);
+    color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 16px}
+  .wrap{width:100%;max-width:480px}
+  header{text-align:center;margin:18px 0 22px}
+  .logo{font-size:40px}
+  h1{font-size:26px;margin:8px 0 6px;letter-spacing:.3px}
+  .tag{color:var(--muted);font-size:15px;line-height:1.5;margin:0 auto;max-width:400px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:20px;margin-bottom:16px;
+    box-shadow:0 10px 40px rgba(0,0,0,.35)}
+  label{display:block;font-size:13px;color:var(--muted);margin:0 0 8px;font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+  .amount-row{display:flex;align-items:center;background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:4px 14px}
+  .amount-row input{flex:1;background:transparent;border:0;color:var(--text);font-size:26px;font-weight:700;padding:12px 0;outline:none;width:100%}
+  .amount-row .unit{font-size:18px;font-weight:700;color:var(--muted)}
+  .picks{display:flex;gap:8px;margin-top:12px}
+  .pick{flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:9px 0;
+    font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+  .pick:hover{border-color:var(--gold)}
+  .quote{margin-top:14px;font-size:15px;color:var(--cyan);min-height:20px;text-align:center}
+  .btn{width:100%;border:0;border-radius:12px;padding:16px;font-size:18px;font-weight:800;cursor:pointer;font-family:inherit;
+    display:flex;align-items:center;justify-content:center;gap:8px;transition:transform .05s ease}
+  .btn:active{transform:scale(.99)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-gold{background:linear-gradient(180deg,#f0c65e,#e0a52f);color:#1a1206}
+  .btn-outline{background:transparent;border:1.5px solid var(--border);color:var(--text)}
+  .connected{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg2);
+    border:1px solid var(--border);border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:4px}
+  .connected .addr{font-family:monospace;color:var(--gold)}
+  .connected .bal{color:var(--muted)}
+  .hidden{display:none!important}
+  .steps{margin-top:16px}
+  .step{display:flex;align-items:center;gap:12px;padding:10px 0;color:var(--muted);font-size:15px;border-top:1px solid var(--border)}
+  .step:first-child{border-top:0}
+  .step .dot{width:22px;height:22px;border-radius:50%;border:2px solid var(--border);flex:0 0 auto;display:flex;
+    align-items:center;justify-content:center;font-size:12px}
+  .step.active{color:var(--text)}
+  .step.active .dot{border-color:var(--gold);color:var(--gold)}
+  .step.done{color:var(--green)}
+  .step.done .dot{border-color:var(--green);background:var(--green);color:#0b0e14}
+  .spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.25);border-top-color:var(--gold);border-radius:50%;
+    display:inline-block;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .note{font-size:13px;color:var(--muted);line-height:1.55;margin-top:14px;text-align:center}
+  .result{margin-top:14px;padding:14px;background:rgba(61,220,132,.08);border:1px solid rgba(61,220,132,.3);border-radius:12px}
+  .result a{color:var(--cyan);text-decoration:none;word-break:break-all;font-size:14px}
+  .result a:hover{text-decoration:underline}
+  .msg{margin-top:12px;font-size:14px;text-align:center;min-height:18px}
+  .msg.err{color:var(--red)}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:8px;line-height:1.6}
+  footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🐋</div>
+    <h1>Get LCAI</h1>
+    <p class="tag">Turn your ETH into native LCAI on Lightchain — one flow. We swap on Uniswap and bridge for you. Non-custodial: you sign every step, we never hold your funds.</p>
+  </header>
+
+  <div class="card">
+    <button class="btn btn-gold" id="btn-connect" onclick="connect()">🔌 Connect Wallet</button>
+    <div id="connected" class="connected hidden">
+      <span>Connected <span class="addr" id="addr"></span></span>
+      <span class="bal" id="bal"></span>
+    </div>
+  </div>
+
+  <div class="card" id="buy-card">
+    <label for="eth-amount">You pay</label>
+    <div class="amount-row">
+      <input id="eth-amount" type="number" inputmode="decimal" min="0" step="0.001" placeholder="0.0" oninput="onAmount()">
+      <span class="unit">ETH</span>
+    </div>
+    <div class="picks">
+      <button class="pick" onclick="setAmount(0.01)">0.01</button>
+      <button class="pick" onclick="setAmount(0.05)">0.05</button>
+      <button class="pick" onclick="setAmount(0.1)">0.1</button>
+    </div>
+    <div class="quote" id="quote"></div>
+
+    <div class="steps hidden" id="steps">
+      <div class="step" id="step-swap"><span class="dot">1</span><span class="lbl">Swap ETH → LCAI on Uniswap</span></div>
+      <div class="step" id="step-approve"><span class="dot">2</span><span class="lbl">Approve LCAI for the bridge</span></div>
+      <div class="step" id="step-bridge"><span class="dot">3</span><span class="lbl">Bridge → native LCAI</span></div>
+    </div>
+
+    <button class="btn btn-gold" id="btn-get" onclick="getLcai()" style="margin-top:16px" disabled>Get LCAI</button>
+    <div class="msg" id="msg"></div>
+    <div class="result hidden" id="result"></div>
+
+    <p class="note">You'll sign 2–3 transactions and pay normal Ethereum gas. Native LCAI arrives in your wallet a few minutes after the bridge confirms.</p>
+  </div>
+
+  <footer>
+    Non-custodial. Powered by Uniswap V3 + the official Lightchain bridge.<br>
+    Not financial advice. Verify you're on <strong>get-lcai</strong> before connecting.
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
+<script src="./eth-pay.js"></script>
+<script>
+  var myAddress = null;
+  var quoteTimer = null;
+  var busy = false;
+
+  function short(a){ return a ? a.slice(0,6)+'…'+a.slice(-4) : ''; }
+  function el(id){ return document.getElementById(id); }
+  function setMsg(t, isErr){ var m=el('msg'); m.textContent=t||''; m.className='msg'+(isErr?' err':''); }
+
+  async function connect(){
+    try{
+      if(!window.ethereum){ setMsg('No wallet found. Install or enable MetaMask.', true); return; }
+      var bp = new window.ethers.BrowserProvider(window.ethereum);
+      await bp.send('eth_requestAccounts', []);
+      var signer = await bp.getSigner();
+      myAddress = await signer.getAddress();
+      el('addr').textContent = short(myAddress);
+      el('connected').classList.remove('hidden');
+      el('btn-connect').classList.add('hidden');
+      try{
+        var bal = await bp.getBalance(myAddress);
+        el('bal').textContent = (+window.ethers.formatEther(bal)).toFixed(4)+' ETH';
+      }catch(e){}
+      refreshButton();
+      setMsg('');
+    }catch(e){ setMsg('Could not connect: '+((e&&e.message)||e), true); }
+  }
+
+  function setAmount(v){ el('eth-amount').value = v; onAmount(); }
+
+  function onAmount(){
+    refreshButton();
+    var v = parseFloat(el('eth-amount').value);
+    el('quote').textContent = '';
+    if(!v || v<=0 || !window.EthPay){ return; }
+    clearTimeout(quoteTimer);
+    el('quote').textContent = 'Getting a price…';
+    quoteTimer = setTimeout(async function(){
+      try{
+        var out = await EthPay.quote(String(v));
+        var lcai = (+window.ethers.formatEther(out));
+        el('quote').textContent = '≈ ' + lcai.toLocaleString(undefined,{maximumFractionDigits:2}) + ' native LCAI';
+      }catch(e){ el('quote').textContent = ''; }
+    }, 500);
+  }
+
+  function refreshButton(){
+    var v = parseFloat(el('eth-amount').value);
+    el('btn-get').disabled = busy || !myAddress || !v || v<=0;
+  }
+
+  function markStep(id, state){
+    var s = el(id); if(!s) return;
+    s.className = 'step ' + (state||'');
+    var dot = s.querySelector('.dot');
+    if(state==='done') dot.innerHTML = '✓';
+    else if(state==='active') dot.innerHTML = '<span class="spin"></span>';
+    else dot.textContent = id==='step-swap'?'1':id==='step-approve'?'2':'3';
+  }
+
+  async function getLcai(){
+    if(busy) return;
+    var v = parseFloat(el('eth-amount').value);
+    if(!myAddress){ setMsg('Connect your wallet first.', true); return; }
+    if(!v || v<=0){ setMsg('Enter an ETH amount.', true); return; }
+    if(!window.EthPay){ setMsg('Payment engine not loaded — refresh and retry.', true); return; }
+
+    busy = true; refreshButton();
+    el('result').classList.add('hidden');
+    el('steps').classList.remove('hidden');
+    markStep('step-swap','active'); markStep('step-approve',''); markStep('step-bridge','');
+    setMsg('');
+
+    try{
+      // 1) Swap ETH -> LCAI-ERC20 (delivered to the user's own wallet).
+      var swap = await EthPay.swapEthForLcai(String(v), function(phase, m){
+        if(phase==='swap') setMsg(m);
+      });
+      markStep('step-swap','done');
+
+      // 2 + 3) Approve + bridge LCAI-ERC20 -> native LCAI, to the SAME wallet.
+      var bridge = await EthPay.bridgeLcaiToNative(swap.receivedLcai, myAddress, function(phase, m){
+        if(phase==='approve'){ markStep('step-approve','active'); setMsg(m); }
+        if(phase==='bridge'){ markStep('step-approve','done'); markStep('step-bridge','active'); setMsg(m); }
+      });
+      markStep('step-approve','done'); markStep('step-bridge','done');
+
+      var got = (+window.ethers.formatEther(swap.receivedLcai)).toLocaleString(undefined,{maximumFractionDigits:2});
+      setMsg('');
+      el('result').classList.remove('hidden');
+      el('result').innerHTML =
+        '<div style="font-weight:700;color:var(--green);margin-bottom:8px">✅ Done — '+got+' native LCAI is on its way to your wallet</div>'+
+        '<div style="color:var(--muted);font-size:13px;margin-bottom:8px">It lands in a few minutes once the bridge relayer delivers.</div>'+
+        '<div><a href="https://etherscan.io/tx/'+swap.txHash+'" target="_blank" rel="noopener">Swap transaction ↗</a></div>'+
+        '<div style="margin-top:4px"><a href="https://etherscan.io/tx/'+bridge.txHash+'" target="_blank" rel="noopener">Bridge transaction ↗</a></div>';
+    }catch(e){
+      var m = (e && (e.shortMessage || e.message)) || String(e);
+      if(/reject|denied|4001/i.test(m)) setMsg('Cancelled — nothing was sent. Try again anytime.', true);
+      else setMsg("Didn't go through: "+m, true);
+      // roll active spinners back so the UI isn't stuck spinning
+      ['step-swap','step-approve','step-bridge'].forEach(function(id){
+        var s=el(id); if(s && s.classList.contains('active')) markStep(id,'');
+      });
+    }finally{
+      busy = false; refreshButton();
+    }
+  }
+
+  // Reflect account changes from the wallet.
+  if(window.ethereum && window.ethereum.on){
+    window.ethereum.on('accountsChanged', function(){ myAddress=null; el('connected').classList.add('hidden'); el('btn-connect').classList.remove('hidden'); refreshButton(); });
+  }
+</script>
+</body>
+</html>
