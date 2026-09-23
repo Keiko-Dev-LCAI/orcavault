@@ -104,6 +104,21 @@ KEIKO_PRICE          = float(os.environ.get("KEIKO_PRICE", "200"))  # ~20% under
 _keiko_used = keiko_pay.UsedTxStore(
     os.environ.get("KEIKO_USED_TX_FILE", "/data/keiko_used_tx.json")
 )
+# ── ETH → LCAI-ERC20 Uniswap + official Hyperlane warp (native LCAI to relay) ─
+ETH_RPC_URL     = os.environ.get("ETH_RPC_URL", "https://ethereum.publicnode.com").strip()
+LCAI_WARP_ROUTE = os.environ.get("LCAI_WARP_ROUTE", "0x01f80bb8e78e79881E8Ec7832fB6C2c59f64e353").strip()
+LCAI_ERC20_ETH  = os.environ.get("LCAI_ERC20_ETH", "0x9cA8530CA349c966Fe9ef903Df17a75B8A778927").strip()
+ETH_PAY_ENABLED = os.environ.get("ETH_PAY_ENABLED", "1").strip().lower() not in ("", "0", "false")
+_eth_used = keiko_pay.UsedTxStore(
+    os.environ.get("ETH_USED_TX_FILE", "/data/eth_used_tx.json")
+)
+_eth_w3 = None
+def get_eth_w3():
+    global _eth_w3
+    if _eth_w3 is None:
+        _eth_w3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
+    return _eth_w3
+_TRANSFER_REMOTE_SEL = Web3.keccak(text="transferRemote(uint32,bytes32,uint256)")[:4]
 LT_STREAM_CACHE_DIR      = os.environ.get("LT_STREAM_CACHE_DIR", "/data/lt_stream_cache")
 OV_STREAM_CACHE_DIR      = os.environ.get("OV_STREAM_CACHE_DIR", "/data/ov_stream_cache")
 GITHUB_TOKEN             = os.environ.get("GITHUB_TOKEN", "")
@@ -2794,6 +2809,7 @@ def check_access():
         'keiko_amount':   KEIKO_PRICE if KEIKO_RECEIVE_WALLET else None,
         'keiko_token':    keiko_pay.KEIKO_TOKEN_ADDRESS if KEIKO_RECEIVE_WALLET else None,
         'keiko_receive':  KEIKO_RECEIVE_WALLET or None,
+        'eth_enabled':    ETH_PAY_ENABLED,
     })
 
 def _hx(x):
@@ -2853,6 +2869,126 @@ def _verify_usdc_payment(tx_hash, wallet_address, relay_address):
 
     return False, (f"No USDC transfer of >= {ORCAVAULT_USDC_AMOUNT} USDC "
                    f"to the relay wallet was found in this transaction")
+
+
+def _verify_eth_bridge(bridge_tx_hash, wallet_address, relay_address, fee_wei):
+    """
+    Verify an Ethereum-mainnet Hyperlane transferRemote that bridges LCAI-ERC20
+    to native LCAI for the OrcaVault relay wallet. Returns (ok, err).
+    """
+    try:
+        eth = get_eth_w3()
+        tx = eth.eth.get_transaction(bridge_tx_hash)
+        receipt = eth.eth.get_transaction_receipt(bridge_tx_hash)
+    except Exception:
+        return False, 'Ethereum transaction not found — wait a moment and try again'
+    if tx is None or receipt is None:
+        return False, 'Ethereum transaction not yet mined — wait a moment and try again'
+    if receipt.get('status', 1) == 0:
+        return False, 'Ethereum bridge transaction failed on chain'
+    if (tx.get('from') or '').lower() != wallet_address.lower():
+        return False, 'Bridge transaction was not sent from your wallet address'
+    warp = Web3.to_checksum_address(LCAI_WARP_ROUTE)
+    if not tx.get('to') or Web3.to_checksum_address(tx['to']) != warp:
+        return False, 'Transaction was not sent to the official LCAI warp route'
+    raw = tx.get('input') or tx.get('data') or b''
+    if hasattr(raw, 'hex'):
+        data_hex = raw.hex()
+        if not data_hex.startswith('0x'):
+            data_hex = '0x' + data_hex
+    else:
+        data_hex = str(raw)
+        if not data_hex.startswith('0x'):
+            data_hex = '0x' + data_hex
+    data_hex = data_hex.lower()
+    sel = '0x' + _TRANSFER_REMOTE_SEL.hex()
+    if not data_hex.startswith(sel):
+        return False, 'Not a transferRemote bridge call'
+    payload = data_hex[10:]
+    if len(payload) < 192:
+        return False, 'Malformed transferRemote calldata'
+    destination = int(payload[0:64], 16)
+    recipient   = payload[64:128]
+    amount      = int(payload[128:192], 16)
+    if destination != 9200:
+        return False, 'Bridge destination is not Lightchain (9200)'
+    rec_addr = '0x' + recipient[-40:]
+    if rec_addr != relay_address.lower():
+        return False, 'Native LCAI is not being sent to the OrcaVault relay wallet'
+    if amount < fee_wei:
+        return False, f'Bridged amount too small: {amount} wei, required {fee_wei} wei'
+    token = Web3.to_checksum_address(LCAI_ERC20_ETH)
+    want_from = wallet_address.lower()
+    want_to   = warp.lower()
+    found = False
+    for log in receipt.get('logs', []):
+        try:
+            if Web3.to_checksum_address(log['address']) != token:
+                continue
+            topics = log['topics']
+            if len(topics) < 3:
+                continue
+            if _hx(topics[0]) != _ERC20_TRANSFER_TOPIC:
+                continue
+            from_addr = '0x' + _hx(topics[1])[-40:]
+            to_addr   = '0x' + _hx(topics[2])[-40:]
+            value     = int(_hx(log['data']), 16)
+            if from_addr == want_from and to_addr == want_to and value == amount:
+                found = True
+                break
+        except Exception:
+            continue
+    if not found:
+        return False, 'No matching LCAI ERC-20 Transfer into the warp route in this transaction'
+    return True, None
+
+
+@app.route('/api/register-eth-payment', methods=['POST'])
+def register_eth_payment():
+    """
+    Unlock relay access after a verified Ethereum-side Hyperlane bridge tx
+    (ETH→LCAI swap already happened; this checks transferRemote to the relay).
+    Body: { walletAddress, bridgeTxHash }  (swapTxHash / extras ignored).
+    """
+    if not ETH_PAY_ENABLED:
+        return jsonify({'error': 'Ethereum payments are not enabled'}), 400
+    body = request.get_json() or {}
+    wallet_address = (body.get('walletAddress') or '').strip()
+    tx_hash = (body.get('bridgeTxHash') or body.get('txHash') or '').strip()
+    if not wallet_address or not tx_hash:
+        return jsonify({'error': 'walletAddress and bridgeTxHash required'}), 400
+    try:
+        wallet_address = Web3.to_checksum_address(wallet_address)
+    except Exception:
+        return jsonify({'error': 'Invalid wallet address'}), 400
+    if has_relay_access(wallet_address):
+        return jsonify({
+            'success': True,
+            'message': 'Already has relay access',
+            'tier': 'owner' if wallet_address.lower() in OWNER_WALLETS else 'paid',
+            'paid_with': 'eth',
+        })
+    if _eth_used.seen(tx_hash):
+        return jsonify({'error': 'This Ethereum payment has already been used'}), 400
+    relay = get_relay_account()
+    relay_balance = float(w3.from_wei(w3.eth.get_balance(relay.address), 'ether'))
+    fee = current_fee_lcai(relay_balance)
+    if fee is None:
+        return jsonify({'error': 'New registrations temporarily paused — relay wallet is being refilled. Try again soon.'}), 503
+    fee_wei = Web3.to_wei(fee, 'ether')
+    ok, err = _verify_eth_bridge(tx_hash, wallet_address, relay.address, fee_wei)
+    if not ok:
+        return jsonify({'error': err or 'Ethereum payment could not be verified'}), 400
+    _eth_used.add(tx_hash)
+    paid = load_paid_wallets()
+    paid.add(wallet_address.lower())
+    save_paid_wallets(paid)
+    return jsonify({
+        'success': True,
+        'message': f'Relay access unlocked for {wallet_address}',
+        'tier': 'paid',
+        'paid_with': 'eth',
+    })
 
 
 @app.route('/api/register-payment', methods=['POST'])

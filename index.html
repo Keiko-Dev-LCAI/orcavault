@@ -51,6 +51,7 @@ contract AudioVisualArchives {
 -->
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.umd.min.js"></script>
 <script src="keiko-pay.js"></script>
+<script src="eth-pay.js"></script>
 <script type="module">
   try {
     const { EthereumProvider } = await import('https://esm.sh/@walletconnect/ethereum-provider@2.17.3');
@@ -1105,6 +1106,11 @@ body.mod-menu-open .memory-card:hover,body.mod-menu-open .vault-card:hover{trans
     <div id="relay-unlock-hint" style="font-size:16px;color:var(--muted);margin:8px 0 16px;line-height:1.6"></div>
     <button class="btn btn-gold" id="btn-relay-pay" onclick="payRelayUnlock()" style="width:100%;justify-content:center;min-height:58px;font-size:20px;margin-bottom:10px">⚡ Pay <span id="relay-pay-fee-label">2</span> LCAI to Unlock</button>
     <button class="btn btn-outline" id="btn-relay-pay-keiko" onclick="payRelayUnlockKeiko()" style="width:100%;justify-content:center;min-height:48px;font-size:16px;margin-bottom:14px;display:none;border-color:var(--gold);color:var(--gold)">💜 Pay with KEIKO (save ~20%) — <span id="relay-keiko-amount-label">200</span> KEIKO</button>
+    <button class="btn btn-eth" id="btn-relay-pay-eth" onclick="payRelayUnlockEth()"
+      style="width:100%;justify-content:center;font-size:16px;min-height:50px;margin-top:0;margin-bottom:14px">
+      Ξ Pay with Ethereum
+    </button>
+    <div id="eth-quote" class="muted" style="display:none;font-size:13px;margin-top:6px;margin-bottom:10px"></div>
     <div style="display:flex;gap:12px;margin-bottom:8px">
       <button class="btn btn-outline" onclick="document.getElementById('modal-relay-unlock').classList.add('hidden')" style="flex:1;justify-content:center">Cancel</button>
     </div>
@@ -1508,6 +1514,7 @@ let relayTier       = 'none';  // 'owner' | 'paid' | 'none'
 let relayFee        = null;    // current signup fee in LCAI (null = paused)
 let relayWalletAddr = '';      // relay wallet address (for payment instructions)
 let relayKeikoCfg   = null;    // {enabled, amount, receive, token} from check-access
+let relayEthEnabled = true;
 let readContractV3  = null;    // read-only V3 contract
 
 // ── ADMIN / MODERATION STATE ──
@@ -3161,6 +3168,46 @@ async function submitAgentFeedback() {
   }
 }
 
+async function payRelayUnlockEth() {
+  const btn = document.getElementById('btn-relay-pay-eth');
+  try {
+    if (!wallet)          { showToast('Connect your wallet first', true); return; }
+    if (!relayWalletAddr) { showToast('Relay address not loaded — try again in a moment', true); return; }
+    if (!window.EthPay)   { showToast('Payment module not loaded — refresh and retry', true); return; }
+
+    const feeLcai = relayFee || 2;
+
+    const q = document.getElementById('eth-quote');
+    if (q) { q.style.display='block'; q.textContent='Getting a price…'; }
+    const ethNeeded = await EthPay.ethForLcai(String(feeLcai), 0.15);
+    if (q) q.textContent = `You'll deposit ~${ethNeeded} ETH to cover ${feeLcai} LCAI (incl. swap + bridge).`;
+
+    if (btn) btn.disabled = true;
+    showLoading('Swapping ETH → LCAI…', 'Approve the transactions in your wallet.');
+
+    const res = await EthPay.pay({
+      ethAmount:   ethNeeded,
+      recipientL1: relayWalletAddr,
+      verifyUrl:   `${RELAY_URL}/api/register-eth-payment`,
+      meta:        { app: 'orcavault' }
+    }, (phase, msg) => showLoading(msg, phase === 'bridge' ? 'Bridging to native LCAI…' : ''));
+
+    if (!res.ok) throw new Error(res.error || 'Payment failed');
+
+    hideLoading();
+    relayAccess = true; relayTier = 'paid';
+    updateRelayUI();
+    document.getElementById('modal-relay-unlock').classList.add('hidden');
+    showToast('🎉 Paid with Ethereum — unlocked forever!');
+  } catch (e) {
+    hideLoading();
+    if (btn) btn.disabled = false;
+    const m = (e && (e.shortMessage || e.message)) || String(e);
+    if (/reject|denied|4001/i.test(m)) showToast('Payment cancelled — try again anytime.', true);
+    else showToast("Ethereum payment didn't go through: " + m, true);
+  } finally { if (btn) btn.disabled = false; }
+}
+
 async function payRelayUnlock() {
   const btn = document.getElementById('btn-relay-pay');
   try {
@@ -3845,6 +3892,7 @@ async function checkRelayAccess(walletAddr) {
       receive: data.keiko_receive,
       token: data.keiko_token,
     } : null;
+    relayEthEnabled = data.eth_enabled !== false;
     updateRelayUI();
   } catch(e) {
     // silently ignore — relay is optional
@@ -4243,6 +4291,7 @@ function showRelayUnlockModal() {
   const payBtn   = document.getElementById('btn-relay-pay');
   const keikoBtn = document.getElementById('btn-relay-pay-keiko');
   const keikoAmt = document.getElementById('relay-keiko-amount-label');
+  const ethBtn   = document.getElementById('btn-relay-pay-eth');
   if (walletEl) walletEl.textContent = relayWalletAddr || 'Connect wallet first';
   if (feeEl)    feeEl.textContent    = fee;
   if (feeMan)   feeMan.textContent   = fee;
@@ -4256,6 +4305,7 @@ function showRelayUnlockModal() {
     if (hint) hint.textContent = 'Connect your wallet first, then you can pay in one tap.';
     if (payBtn) { payBtn.disabled = true; payBtn.textContent = '🔌 Connect wallet to pay'; payBtn.onclick = () => { document.getElementById('modal-relay-unlock').classList.add('hidden'); connectWallet(); }; }
     if (keikoBtn) keikoBtn.disabled = true;
+    if (ethBtn) ethBtn.disabled = true;
   } else {
     if (hint) hint.textContent = `You'll need ${fee} LCAI in your connected wallet (or pay with KEIKO for ~20% off). One approval unlocks forever.`;
     if (payBtn) {
@@ -4264,7 +4314,9 @@ function showRelayUnlockModal() {
       payBtn.onclick = payRelayUnlock;
     }
     if (keikoBtn) keikoBtn.disabled = false;
+    if (ethBtn) ethBtn.disabled = false;
   }
+  if (ethBtn) ethBtn.style.display = relayEthEnabled ? '' : 'none';
   document.getElementById('modal-relay-unlock').classList.remove('hidden');
 }
 
