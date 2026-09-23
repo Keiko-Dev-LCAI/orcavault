@@ -2430,16 +2430,29 @@ function buildMemoryThumbHtml(m, opts = {}) {
     ? `<button onclick="event.stopPropagation();setAdminThumbnail(${vaultId},${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(232,184,75,0.9);border:1px solid var(--gold);color:#1a1a1a;font-size:14px;font-weight:700;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">🛡️ Set thumbnail</button>`
     : '';
 
+  // Owner control to set/replace a video thumbnail. Must render even when a
+  // speculative thumb URL exists (that URL 404s to a clapper) — otherwise the
+  // owner never gets a button to add one. Only shown on the owner's own card.
+  let ownerVideoThumbBtn = '';
+  if (m.memType === 'video' && isOwnerCard) {
+    const sibs = getThumbSiblingMemories(vaultId, idx, m.title);
+    const sibHasThumb = sibs.some(s => localStorage.getItem('ov_thumb_' + s.idx));
+    ownerVideoThumbBtn = sibHasThumb
+      ? `<button onclick="event.stopPropagation();copyThumbnailFromSibling(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">📷 Same thumbnail</button>`
+      : `<button onclick="event.stopPropagation();setVideoThumbnail(${idx})" style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:14px;padding:5px 14px;border-radius:8px;cursor:pointer;white-space:nowrap;font-family:inherit;z-index:2">📷 Set thumbnail</button>`;
+  }
+  const overlayThumbBtn = adminThumbBtn || ownerVideoThumbBtn;
+
   if (savedThumb) {
     const img = ovThumbImgHtml(vaultId, idx, m.title, savedThumb);
-    return adminThumbBtn ? `<div style="position:relative">${img}${adminThumbBtn}</div>` : img;
+    return overlayThumbBtn ? `<div style="position:relative">${img}${overlayThumbBtn}</div>` : img;
   }
   if (urlCandidates.length) {
     const primary = urlCandidates[0];
     const fallbacks = urlCandidates.slice(1);
     const fbAttr = fallbacks.length ? ` data-fb="${escHtml(fallbacks.join('|'))}"` : '';
-    const img = `<img class="memory-thumb" src="${escHtml(primary)}" alt="${escHtml(m.title || '')}" loading="lazy"${fbAttr} onerror="ovThumbImgError(this)">`;
-    return adminThumbBtn ? `<div style="position:relative">${img}${adminThumbBtn}</div>` : img;
+    const img = `<img class="memory-thumb" src="${escHtml(primary)}" alt="${escHtml(m.title || '')}" loading="lazy"${fbAttr} data-icon="${icon}" onerror="ovThumbImgError(this)">`;
+    return overlayThumbBtn ? `<div style="position:relative">${img}${overlayThumbBtn}</div>` : img;
   }
   if (m.memType === 'photo' && !m._isChunked && m.dataURI && m.dataURI.startsWith('data:image')) {
     return ovThumbImgHtml(vaultId, idx, m.title, m.dataURI);
@@ -5149,7 +5162,13 @@ async function loadPublicBrowse() {
     // Parse privacy + filter
     const publicMems = allMems.filter(m => {
       const parsed = parseCaption(m.caption);
-      if (parsed.isPrivate) return false;              // private is never shown publicly, even to admins
+      // Effective privacy: the creator's relay visibility override wins over the
+      // on-chain prefix, exactly like the owner archive view. Without this a memory
+      // the owner toggled Public stays hidden here (uploads default to private).
+      const ov = visibilityOverrides[String(m.idx)];
+      const ovApplies = ov && ov.setter && m.addedBy && ov.setter.toLowerCase() === m.addedBy.toLowerCase();
+      const effectivePriv = ovApplies ? (ov.visibility === 'private') : parsed.isPrivate;
+      if (effectivePriv) return false;                 // private is never shown publicly, even to admins
       // Perm-remove / ban: gone for EVERYONE including admin (Keiko: don't keep seeing removed content)
       if (permRemovedMemories.has(String(m.idx))) return false;
       if (m.addedBy && bannedWallets.has(m.addedBy.toLowerCase())) return false;
