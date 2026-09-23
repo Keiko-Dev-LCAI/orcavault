@@ -2863,7 +2863,7 @@ async function waitForOvRelayStream(statusUrl, totalChunks, onProgress) {
   throw new Error('Stream preparation timed out — try again shortly');
 }
 
-async function loadAndShowMemory(vaultId, idx) {
+async function loadAndShowMemory(vaultId, idx, _attempt = 0) {
   showScreen('view-memory');
   showLoading('Loading memory…', 'Reading from Lightchain');
   vmQRGenerated = false;
@@ -2898,6 +2898,25 @@ async function loadAndShowMemory(vaultId, idx) {
         if (events.length === 0) throw new Error('Memory not found on chain');
         const e = events[0];
         mem = { idx: Number(e.args[1]), addedBy: e.args[2], memType: e.args[3], title: e.args[4], caption: e.args[5], date: e.args[6], dataURI: e.args[7], txHash: e.transactionHash, _isChunked: false };
+      }
+    }
+
+    // Privacy gate. Strip any ||priv|| tag from the caption (memories fetched fresh
+    // by direct link never went through the grid's caption parse) and, if the memory
+    // is private, only the creator (or an admin) may view it — a share link must not
+    // expose a private memory. Creator's relay override wins over the on-chain prefix.
+    {
+      const _pc = parseCaption(mem.caption);
+      mem.caption = _pc.caption;
+      const _ov = visibilityOverrides[String(idx)];
+      const _ovApplies = _ov && _ov.setter && mem.addedBy && _ov.setter.toLowerCase() === mem.addedBy.toLowerCase();
+      const _effPriv = _ovApplies ? (_ov.visibility === 'private') : (mem._private != null ? mem._private : _pc.isPrivate);
+      const _isOwnerViewer = wallet && mem.addedBy && wallet.toLowerCase() === mem.addedBy.toLowerCase();
+      if (_effPriv && !_isOwnerViewer && !isAdmin) {
+        hideLoading();
+        document.getElementById('vm-media-container').innerHTML = `<div class="empty-state"><div class="empty-state-icon">🔒</div><div class="empty-state-title">This memory is private</div><div class="empty-state-sub">The owner has set this memory to private, so it can't be viewed here.</div></div>`;
+        const dw = document.getElementById('creator-delete-wrap'); if (dw) dw.style.display = 'none';
+        return;
       }
     }
 
@@ -3063,8 +3082,15 @@ async function loadAndShowMemory(vaultId, idx) {
     hideLoading();
     if (_officePreview) renderOfficePreview(_officePreview.mode, _officePreview.dataURI);
   } catch(e) {
+    const msg = (e && (e.message || e)) || 'Unknown error';
+    // A relay that was idle (Railway sleeps) often fails the very first request,
+    // then works. Silently retry once for connection-type errors before alarming.
+    if (_attempt < 1 && /failed to fetch|network|load failed|fetch/i.test(String(msg))) {
+      await new Promise(r => setTimeout(r, 1500));
+      return loadAndShowMemory(vaultId, idx, _attempt + 1);
+    }
     hideLoading();
-    document.getElementById('vm-media-container').innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Could not load memory</div><div class="empty-state-sub">${e.message||e}</div></div>`;
+    document.getElementById('vm-media-container').innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Could not load memory</div><div class="empty-state-sub">${escHtml(String(msg))}<br><br>This is usually a temporary connection hiccup.</div><button class="btn btn-gold" style="margin-top:14px" onclick="loadAndShowMemory(${vaultId},${idx})">↻ Try again</button></div>`;
   }
 }
 
@@ -4155,13 +4181,28 @@ async function doJobRelayUpload({ file, title, caption, memType, template }) {
     document.getElementById('cp-pct').textContent = '60%';
 
     const completedJob = await new Promise((resolve, reject) => {
+      // Guard against an unresponsive relay: bail if progress stalls for too long,
+      // or if we lose the connection for many polls in a row, instead of spinning forever.
+      const STALL_MS = 90000;      // no forward progress for 90s → give up with guidance
+      let lastProgressVal = -1;
+      let lastProgressAt  = Date.now();
+      let consecutiveErrors = 0;
       const poll = setInterval(async () => {
         try {
           const res = await fetch(`${RELAY_URL}/api/orcavault/upload-progress/${jobId}`);
           const job = await res.json();
+          consecutiveErrors = 0;
           if (!res.ok || job.error === 'Job not found') {
             clearInterval(poll);
             reject(new Error('Server restarted mid-upload — please upload again'));
+            return;
+          }
+          // Track forward progress; stall detection resets whenever the count moves.
+          const pv = Number(job.progress || 0);
+          if (pv !== lastProgressVal || job.status === 'complete') { lastProgressVal = pv; lastProgressAt = Date.now(); }
+          else if (Date.now() - lastProgressAt > STALL_MS) {
+            clearInterval(poll);
+            reject(new Error('The upload stopped responding while finishing on-chain. Your file was sent — reopen the archive in a minute to see if it completed, or try the upload again.'));
             return;
           }
           let pct = 60;
@@ -4180,7 +4221,14 @@ async function doJobRelayUpload({ file, title, caption, memType, template }) {
             clearInterval(poll);
             reject(new Error(job.error || 'Upload failed'));
           }
-        } catch (e) { /* keep polling through hiccups */ }
+        } catch (e) {
+          // Tolerate transient hiccups, but don't poll a dead relay forever.
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= 8) {
+            clearInterval(poll);
+            reject(new Error('Lost connection to the relay while finishing your upload. Reopen the archive in a minute to check whether it completed, or try again.'));
+          }
+        }
       }, 3000);
     });
 
@@ -4444,6 +4492,8 @@ function resetAddMemoryForm() {
   pendingFile = null;
   // Reset visibility to private (default — safest choice)
   setVisibility('private');
+  // A new upload just happened — force Browse to refetch so it shows up.
+  _browseAllMemories = null;
 }
 
 // ════════════════════════════════════════════════════════
@@ -4791,6 +4841,8 @@ async function toggleMemoryVisibility(memIdx, currentVis, addedBy) {
     if (data.success) {
       visibilityOverrides[String(memIdx)] = { setter: wallet.toLowerCase(), visibility: newVis };
       showToast(newVis === 'private' ? '🔒 Set to Private' : '🌐 Set to Public');
+      // Visibility changed — force Browse to refetch so public/private is reflected.
+      _browseAllMemories = null;
       renderMemoriesGrid();
     } else {
       showToast('Error: ' + (data.error || 'Could not update visibility'));
@@ -5035,6 +5087,9 @@ async function creatorDeleteMemory() {
     const deletedIdx = _currentViewMemIdx;
     currentMemories = (currentMemories || []).filter(m => Number(m.idx) !== Number(deletedIdx));
     hiddenMemories.add(String(deletedIdx));
+    // Clean up the memory's saved thumbnail and force Browse to refetch.
+    try { localStorage.removeItem('ov_thumb_' + deletedIdx); } catch (e) {}
+    _browseAllMemories = null;
     const vaultIdForCleanup = currentVaultId;
     goViewVaultFromMemory();
     setTimeout(() => { maybeCleanupEmptyArchive(vaultIdForCleanup); }, 400);
