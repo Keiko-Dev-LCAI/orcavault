@@ -1106,13 +1106,19 @@ body.mod-menu-open .memory-card:hover,body.mod-menu-open .vault-card:hover{trans
     <div id="relay-unlock-hint" style="font-size:16px;color:var(--muted);margin:8px 0 16px;line-height:1.6"></div>
     <button class="btn btn-gold" id="btn-relay-pay" onclick="payRelayUnlock()" style="width:100%;justify-content:center;min-height:58px;font-size:20px;margin-bottom:10px">⚡ Pay <span id="relay-pay-fee-label">2</span> LCAI to Unlock</button>
     <button class="btn btn-outline" id="btn-relay-pay-keiko" onclick="payRelayUnlockKeiko()" style="width:100%;justify-content:center;min-height:48px;font-size:16px;margin-bottom:14px;display:none;border-color:var(--gold);color:var(--gold)">💜 Pay with KEIKO (save ~20%) — <span id="relay-keiko-amount-label">200</span> KEIKO</button>
-    <button class="btn btn-eth" id="btn-relay-pay-eth" onclick="payRelayUnlockEth()"
-      style="width:100%;justify-content:center;font-size:16px;min-height:50px;margin-top:0;margin-bottom:14px">
-      Ξ Pay with Ethereum
-    </button>
-    <div id="eth-quote" class="muted" style="display:none;font-size:13px;margin-top:6px;margin-bottom:10px"></div>
+    <details id="relay-advanced-pay" style="margin-top:4px;margin-bottom:14px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:12px;padding:10px 16px">
+      <summary style="cursor:pointer;font-weight:700;color:var(--muted);font-size:15px">⚙️ Advanced — pay with Ethereum</summary>
+      <div style="margin-top:12px">
+        <div class="muted" style="font-size:13px;line-height:1.5;margin-bottom:10px">Don't hold LCAI? This pays in ETH by auto-swapping to LCAI and bridging to native LCAI. It takes a few more wallet steps and network fees — paying directly in LCAI above is simpler.</div>
+        <button class="btn btn-eth" id="btn-relay-pay-eth" onclick="payRelayUnlockEth()"
+          style="width:100%;justify-content:center;font-size:16px;min-height:50px;margin:0 0 6px">
+          Ξ Pay with Ethereum
+        </button>
+        <div id="eth-quote" class="muted" style="display:none;font-size:13px;margin-top:6px;margin-bottom:2px"></div>
+      </div>
+    </details>
     <div style="display:flex;gap:12px;margin-bottom:8px">
-      <button class="btn btn-outline" onclick="document.getElementById('modal-relay-unlock').classList.add('hidden')" style="flex:1;justify-content:center">Cancel</button>
+      <button class="btn btn-outline" onclick="pendingStoreAfterUnlock=false;document.getElementById('modal-relay-unlock').classList.add('hidden')" style="flex:1;justify-content:center">Cancel</button>
     </div>
     <details style="margin-top:18px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:12px;padding:12px 16px">
       <summary style="cursor:pointer;font-weight:700;color:var(--muted);font-size:16px">Paid another way? Paste your transaction hash</summary>
@@ -1515,6 +1521,7 @@ let relayFee        = null;    // current signup fee in LCAI (null = paused)
 let relayWalletAddr = '';      // relay wallet address (for payment instructions)
 let relayKeikoCfg   = null;    // {enabled, amount, receive, token} from check-access
 let relayEthEnabled = true;
+let pendingStoreAfterUnlock = false; // resume the in-progress upload right after a successful unlock
 let readContractV3  = null;    // read-only V3 contract
 
 // ── ADMIN / MODERATION STATE ──
@@ -3198,7 +3205,8 @@ async function payRelayUnlockEth() {
     relayAccess = true; relayTier = 'paid';
     updateRelayUI();
     document.getElementById('modal-relay-unlock').classList.add('hidden');
-    showToast('🎉 Paid with Ethereum — unlocked forever!');
+    showToast(pendingStoreAfterUnlock ? '🎉 Paid with Ethereum — finishing your upload…' : '🎉 Paid with Ethereum — unlocked forever!');
+    resumeUploadIfPending();
   } catch (e) {
     hideLoading();
     if (btn) btn.disabled = false;
@@ -3247,7 +3255,8 @@ async function payRelayUnlock() {
     relayAccess = true; relayTier = 'paid';
     updateRelayUI();
     document.getElementById('modal-relay-unlock').classList.add('hidden');
-    showToast('🎉 Unlocked forever! One-click uploads are on — no more confirmations.');
+    showToast(pendingStoreAfterUnlock ? '🎉 Unlocked! Finishing your upload…' : '🎉 Unlocked forever! One-click uploads are on — no more confirmations.');
+    resumeUploadIfPending();
   } catch (e) {
     hideLoading();
     if (btn) btn.disabled = false;
@@ -3281,7 +3290,8 @@ async function payRelayUnlockKeiko() {
     relayAccess = true; relayTier = 'paid';
     updateRelayUI();
     document.getElementById('modal-relay-unlock').classList.add('hidden');
-    showToast('🎉 Unlocked with KEIKO! One-click uploads are on.');
+    showToast(pendingStoreAfterUnlock ? '🎉 Paid with KEIKO — finishing your upload…' : '🎉 Unlocked with KEIKO! One-click uploads are on.');
+    resumeUploadIfPending();
   } catch (e) {
     hideLoading();
     if (btn) btn.disabled = false;
@@ -3708,6 +3718,7 @@ async function storeMemory() {
       });
     }
     btn.disabled = false;
+    pendingStoreAfterUnlock = true; // resume this upload automatically once unlocked
     showToast('Big movies upload in one click through the relay — unlock one-click uploads first (⚡).', true);
     try { showRelayUnlockModal(); } catch (e) {}
     const unlockSec = document.getElementById('relay-unlock-section');
@@ -4017,6 +4028,42 @@ async function doRelayUpload() {
   }
 }
 
+// Grab a poster frame straight from the user's file at upload time. Reliable for large
+// chunked videos — no need to re-stream the whole file back from the relay later (which
+// is slow and often fails, leaving the bare clapper icon).
+function captureVideoThumbFromFile(file) {
+  return new Promise(function (resolve) {
+    try {
+      if (!file || !/^video\//i.test(file.type || '')) { resolve(null); return; }
+      const url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      let done = false;
+      const finish = function (val) {
+        if (done) return; done = true;
+        try { URL.revokeObjectURL(url); } catch (e) {}
+        resolve(val);
+      };
+      video.muted = true; video.playsInline = true; video.preload = 'metadata'; video.src = url;
+      video.addEventListener('loadedmetadata', function () {
+        const t = (isFinite(video.duration) && video.duration > 0) ? Math.min(1, video.duration / 4) : 0;
+        try { video.currentTime = t; } catch (e) { finish(null); }
+      });
+      video.addEventListener('seeked', function () {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 320; canvas.height = 180;
+          canvas.getContext('2d').drawImage(video, 0, 0, 320, 180);
+          finish(canvas.toDataURL('image/jpeg', 0.8));
+        } catch (e) { finish(null); }
+        video.src = '';
+      });
+      video.addEventListener('error', function () { finish(null); });
+      setTimeout(function () { finish(null); }, 15000); // never hang the upload on a weird file
+      video.load();
+    } catch (e) { resolve(null); }
+  });
+}
+
 async function doJobRelayUpload({ file, title, caption, memType, template }) {
   const btn = document.getElementById('btn-relay-upload');
   if (btn) btn.disabled = true;
@@ -4026,6 +4073,9 @@ async function doJobRelayUpload({ file, title, caption, memType, template }) {
   document.getElementById('cp-status').textContent = 'Sign once to authorize upload…';
   document.getElementById('cp-bar').style.width = '0%';
   document.getElementById('cp-pct').textContent = '0%';
+
+  // Capture a poster frame from the file now, in parallel with the upload.
+  const thumbPromise = (memType === 'video') ? captureVideoThumbFromFile(file) : Promise.resolve(null);
 
   try {
     const relayTimestamp = Date.now().toString();
@@ -4131,6 +4181,12 @@ async function doJobRelayUpload({ file, title, caption, memType, template }) {
       loadAndShowVault(currentVaultId);
       return;
     }
+    // Save the poster frame we grabbed from the file at upload time (idx = 300000 + memoryId
+    // for v3 relay memories). Persists to this device and uploads to the relay for others.
+    try {
+      const thumb = await thumbPromise;
+      if (thumb) persistMemoryThumbnail(currentVaultId, 300000 + Number(memoryId), thumb, title);
+    } catch (e) {}
     prewarmOvStream('v3', memoryId);
     const shareUrl = getMemoryURL(currentVaultId, 300000 + Number(memoryId));
     openShareModal('🎉 Memory Stored Forever!', '"' + title + '" is now permanently on Lightchain — no wallet taps needed!', shareUrl, () => {
@@ -4281,6 +4337,14 @@ async function runRepairMemory() {
   }
 }
 
+// After a successful unlock, if the user was mid-upload, finish the upload for them
+// (merge unlock + upload into one action — no "paid but empty archive" step).
+function resumeUploadIfPending() {
+  if (!pendingStoreAfterUnlock) return;
+  pendingStoreAfterUnlock = false;
+  setTimeout(function () { try { storeMemory(); } catch (e) {} }, 250);
+}
+
 function showRelayUnlockModal() {
   const fee = relayFee || 2;
   const walletEl = document.getElementById('relay-unlock-wallet-addr');
@@ -4317,6 +4381,8 @@ function showRelayUnlockModal() {
     if (ethBtn) ethBtn.disabled = false;
   }
   if (ethBtn) ethBtn.style.display = relayEthEnabled ? '' : 'none';
+  const advPay = document.getElementById('relay-advanced-pay');
+  if (advPay) { advPay.style.display = relayEthEnabled ? '' : 'none'; advPay.open = false; }
   document.getElementById('modal-relay-unlock').classList.remove('hidden');
 }
 
@@ -4346,7 +4412,8 @@ async function submitRelayPayment() {
     document.getElementById('modal-relay-unlock').classList.add('hidden');
     document.getElementById('relay-payment-txhash').value = '';
     if (btn) btn.disabled = false;
-    showToast('🎉 One-click uploads unlocked forever! The ⚡ button is now active.');
+    showToast(pendingStoreAfterUnlock ? '🎉 Unlocked! Finishing your upload…' : '🎉 One-click uploads unlocked forever! The ⚡ button is now active.');
+    resumeUploadIfPending();
   } catch(e) {
     hideLoading();
     if (btn) btn.disabled = false;
