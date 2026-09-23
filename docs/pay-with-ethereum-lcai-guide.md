@@ -54,4 +54,4 @@ OrcaVault example receiver (already published on the ERC-8004 page): payment / r
 4. Native LCAI delivery is the **protocol relayer**, not a machine you operate for this rail (unlike the self-hosted USDC warp).
 5. Do not market this as instant or as a liquid CEX on-ramp. It is swap + official bridge.
 
-Reference: [bridge.lightchain.ai](https://bridge.lightchain.ai), Uniswap V3 docs, Hyperlane TokenRouter `transferRemote`. Related: [USDC self-hosted warp](hyperlane-usdc-warp-guide.md).
+Reference: [bridge.lightchain.ai](https://bridge.lightchain.ai), Uniswap V3 docs, Hyperlane TokenRouter `transferRemote`. Related: [Get LCAI (native LCAI to your wallet)](get-lcai-guide.md) · [USDC self-hosted warp](hyperlane-usdc-warp-guide.md).
