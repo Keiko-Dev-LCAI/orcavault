@@ -20,6 +20,21 @@ This is **not** the self-hosted Base USDC warp. See [Hyperlane USDC warp](hyperl
 
 You sign every step. The page never holds funds.
 
+## Seeing your balance
+
+Native LCAI lands on **Lightchain**, not Ethereum, so it won't appear in your wallet's default (Ethereum) view. To see it:
+
+1. Add the Lightchain network to your wallet (Add Custom Network):
+   - **Network name:** Lightchain AI
+   - **RPC URL:** `https://rpc.mainnet.lightchain.ai`
+   - **Chain ID:** `9200`
+   - **Currency symbol:** `LCAI`
+   - **Block explorer:** `https://lightscan.app`
+2. Switch the wallet to **Lightchain AI**. LCAI is the native coin, so it shows as your main balance — in some wallets you may also need to toggle LCAI on under **Manage crypto**.
+3. Delivery isn't instant: the official Hyperlane relayer mints native LCAI a few minutes after your bridge tx confirms.
+
+**Source of truth:** some wallet indexers (e.g. Trust Wallet) lag or don't fully cover smaller networks, so the balance may read `0` even after it arrives. Search your address at **[lightscan.app](https://lightscan.app)** — if it shows there, the LCAI is in your wallet regardless of what the wallet UI displays.
+
 ## Why V3
 
 LCAI’s Ethereum liquidity is a Uniswap **V3** LCAI/WETH pool (**0.3%**). There is **no V2 pool**. V2 quotes revert.
