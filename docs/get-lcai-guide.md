@@ -1,6 +1,5 @@
 # Get LCAI — swap Ethereum for native LCAI
 
-Pretty print: **[PDF](get-lcai-guide.pdf)** (same scrubbed content).
 
 Live app: **[orcavault.win/get-lcai/](https://orcavault.win/get-lcai/)**
 

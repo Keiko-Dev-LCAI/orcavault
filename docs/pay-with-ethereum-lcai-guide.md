@@ -1,6 +1,5 @@
 # Pay with Ethereum for native LCAI on Lightchain
 
-Pretty print: **[PDF](pay-with-ethereum-lcai-guide.pdf)** (same scrubbed content).
 
 A builder-facing guide to the **official** Lightchain payment rail: a user holds **ETH on Ethereum**, swaps it to **LCAI ERC-20**, then bridges to **native LCAI on Lightchain (chain 9200)** via the protocol Hyperlane warp. OrcaVault uses this so someone can unlock with **Ξ Pay with Ethereum** instead of already holding native LCAI.
 

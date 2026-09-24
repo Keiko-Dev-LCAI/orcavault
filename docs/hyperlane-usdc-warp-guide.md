@@ -1,6 +1,5 @@
 # Build a Hyperlane USDC Warp Route (Base → your chain)
 
-Pretty print: **[PDF](hyperlane-usdc-warp-guide.pdf)** (same scrubbed content).
 
 A builder-facing guide to the payment rail ERC-8004 leaves out: a **self-hosted** Hyperlane warp route that locks real USDC on **Base** and mints synthetic USDC 1:1 on **your chain**. The worked example uses USDC → Lightchain, but any ERC-20 (or a native coin) and any Hyperlane-registered chain works.
 
