@@ -54,9 +54,9 @@ OrcaVault's model is deliberately simple and matches what a human user does on t
 - **2 LCAI** (native Lightchain) — transfer 2 LCAI to the payment address, then register.
 - **or 1 USDC (bridged)** — bridge USDC onto Lightchain via a Hyperlane warp route (Base collateral → Lightchain synthetic USDC), transfer at least 1.0 USDC to the *same* payment address, then register with that transfer's tx hash.
 
-> Want to run your own route? See the [Hyperlane USDC warp build guide](hyperlane-usdc-warp-guide.md). It's self-hosted (you run validator + relayer) — not a public one-click bridge.
+> Want to run your own route? See the [Hyperlane USDC warp build guide](hyperlane-usdc-warp-guide.md) ([PDF](hyperlane-usdc-warp-guide.pdf)). It's self-hosted (you run validator + relayer) — not a public one-click bridge.
 >
-> Paying with **ETH on Ethereum** for **native LCAI** uses Lightchain's **official** warp (Uniswap V3, not V2): [Pay with Ethereum guide](pay-with-ethereum-lcai-guide.md).
+> Paying with **ETH on Ethereum** for **native LCAI** uses Lightchain's **official** warp (Uniswap V3, not V2): [Pay with Ethereum guide](pay-with-ethereum-lcai-guide.md) ([PDF](pay-with-ethereum-lcai-guide.pdf)).
 
 Both options settle to the same address on the same chain:
 
