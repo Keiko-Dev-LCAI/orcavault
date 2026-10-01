@@ -46,7 +46,7 @@ app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(
 # Scoped CORS — override with CORS_ORIGINS env (comma-separated)
 _CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "CORS_ORIGINS",
-    "https://orcavault.win,https://lighttube.win,https://www.lighttube.win,https://lighttunes.win,http://localhost:5000,http://127.0.0.1:5000"
+    "https://orcavault.win,https://lighttube.win,https://www.lighttube.win,https://lighttunes.win,https://orcamint.xyz,https://www.orcamint.xyz,http://localhost:5000,http://127.0.0.1:5000"
 ).split(",") if o.strip()]
 CORS(app, origins=_CORS_ORIGINS)
 
@@ -78,6 +78,10 @@ LIGHTTUBE_V3_ADDRESS     = os.environ.get("LIGHTTUBE_V3_ADDRESS", "")
 LIGHTTUBE_THUMBS_DIR     = os.environ.get("LIGHTTUBE_THUMBS_DIR", "/data/lt_thumbs")
 ORCAVAULT_THUMBS_DIR     = os.environ.get("ORCAVAULT_THUMBS_DIR", "/data/ov_thumbs")
 LIGHTTUBE_REPAIR_CACHE_DIR = os.environ.get("LIGHTTUBE_REPAIR_CACHE_DIR", "/data/lt_repair_cache")
+# LightTube upload fee — same $0.50 LCAI peg as LightTunes (GROK-TASK-lighttube-upload-fee)
+LIGHTTUBE_FEE_USD        = float(os.environ.get("LIGHTTUBE_FEE_USD", "0.50"))
+LIGHTTUBE_FEE_WALLET     = os.environ.get("LIGHTTUBE_FEE_WALLET", "").strip().lower()
+LIGHTTUBE_USED_TX_FILE   = os.environ.get("LIGHTTUBE_USED_TX_FILE", "/data/lighttube_used_tx.json")
 OV_REPAIR_CACHE_DIR        = os.environ.get("OV_REPAIR_CACHE_DIR", "/data/ov_repair_cache")
 # ERC-8004 Validation Registry (Route C). Optional agent key enables best-effort
 # post-upload validationRequest from the agent owner; relay responds as validator.
@@ -1660,6 +1664,14 @@ def lighttube_upload_init():
                 return jsonify({'error': 'Signature does not match wallet'}), 401
         except Exception as e:
             return jsonify({'error': f'Signature error: {e}'}), 401
+
+        # ── Fee verification (normal uploads only; repairs stay free) ──
+        payment_tx = _field('paymentTxHash')
+        fee_err = _verify_native_lcai_fee(
+            wallet, payment_tx, LIGHTTUBE_FEE_USD, LIGHTTUBE_FEE_WALLET,
+            _load_ltube_used_tx, _save_ltube_used_tx)
+        if fee_err:
+            return fee_err
 
         # One relay-wallet upload at a time — prevents nonce collisions when multiple users upload
         if _relay_blockchain_busy():
@@ -4107,6 +4119,9 @@ def lighttube_moderation_lists():
 
 ORCAMINT_GITHUB_REPO   = "Keiko-Dev-LCAI/orcamint"
 ORCAMINT_GITHUB_BRANCH = "main"
+ORCAMINT_FEE_USD       = float(os.environ.get("ORCAMINT_FEE_USD", "0.50"))
+ORCAMINT_FEE_WALLET    = os.environ.get("ORCAMINT_FEE_WALLET", "").strip().lower()
+ORCAMINT_USED_TX_FILE  = os.environ.get("ORCAMINT_USED_TX_FILE", "/data/orcamint_used_tx.json")
 
 _om_perm_hidden_cache    = None   # set of permanently hidden token IDs
 _om_banned_wallets_cache = None   # set of permanently banned wallet addresses
@@ -4742,6 +4757,69 @@ def _save_used_tx(hashes: set):
     except Exception as e:
         print(f"Warning: could not save used_tx: {e}")
 
+def _load_ltube_used_tx():
+    try:
+        with open(LIGHTTUBE_USED_TX_FILE) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def _save_ltube_used_tx(hashes: set):
+    try:
+        os.makedirs(os.path.dirname(LIGHTTUBE_USED_TX_FILE), exist_ok=True)
+        with open(LIGHTTUBE_USED_TX_FILE, 'w') as f:
+            json.dump(list(hashes), f)
+    except Exception as e:
+        print(f"Warning: could not save lighttube used_tx: {e}")
+
+def _load_om_used_tx():
+    try:
+        with open(ORCAMINT_USED_TX_FILE) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def _save_om_used_tx(hashes: set):
+    try:
+        os.makedirs(os.path.dirname(ORCAMINT_USED_TX_FILE), exist_ok=True)
+        with open(ORCAMINT_USED_TX_FILE, 'w') as f:
+            json.dump(list(hashes), f)
+    except Exception as e:
+        print(f"Warning: could not save orcamint used_tx: {e}")
+
+def _verify_native_lcai_fee(wallet, payment_tx, fee_usd, fee_wallet, load_used, save_used):
+    """LightTunes-style native LCAI fee. Returns (response, status) on failure, else None."""
+    wallet = (wallet or '').lower()
+    payment_tx = (payment_tx or '').strip()
+    if fee_usd <= 0:
+        return None
+    if wallet in OWNER_WALLETS:
+        return None
+    if not fee_wallet:
+        return jsonify({'error': 'Upload fee not configured — contact admin'}), 503
+    if not payment_tx:
+        return jsonify({'error': 'Upload fee required — paymentTxHash missing'}), 402
+    used = load_used()
+    if payment_tx.lower() in used:
+        return jsonify({'error': 'This payment transaction has already been used'}), 400
+    try:
+        tx = w3.eth.get_transaction(payment_tx)
+    except Exception:
+        return jsonify({'error': 'Payment transaction not found on chain — wait a moment and retry'}), 404
+    if tx['from'].lower() != wallet:
+        return jsonify({'error': 'Payment was not sent from your wallet'}), 400
+    if (tx.get('to') or '').lower() != fee_wallet.lower():
+        return jsonify({'error': 'Payment was not sent to the correct fee wallet'}), 400
+    price = _get_lcai_price_usd()
+    required = Web3.to_wei(fee_usd / price * 0.90, 'ether')  # 10% slippage tolerance
+    if tx['value'] < required:
+        paid = float(w3.from_wei(tx['value'], 'ether'))
+        needed = round(fee_usd / price, 2)
+        return jsonify({'error': f'Payment too small: sent {paid:.4f} LCAI, required ~{needed} LCAI'}), 400
+    used.add(payment_tx.lower())
+    save_used(used)
+    return None
+
 # ─── LightTunesV1 ABI (relay functions only) ──────────────────────────────────
 LIGHTTUNES_ABI = [
     {"inputs":[{"name":"uploader","type":"address"},{"name":"title","type":"string"},
@@ -5056,6 +5134,51 @@ def lighttunes_fee():
         'lcai_price': price,
         'fee_wallet': LIGHTTUNES_FEE_WALLET,
     })
+
+@app.route('/api/lighttube/fee', methods=['GET'])
+def lighttube_fee():
+    """Return current LightTube upload fee in LCAI and USD (same peg as LightTunes)."""
+    price = _get_lcai_price_usd()
+    if LIGHTTUBE_FEE_USD <= 0:
+        fee_lcai = 0.0
+    else:
+        fee_lcai = round(LIGHTTUBE_FEE_USD / price, 2) if price > 0 else None
+    return jsonify({
+        'fee_usd':    LIGHTTUBE_FEE_USD,
+        'fee_lcai':   fee_lcai,
+        'lcai_price': price,
+        'fee_wallet': LIGHTTUBE_FEE_WALLET,
+    })
+
+@app.route('/api/orcamint/fee', methods=['GET'])
+def orcamint_fee():
+    """Return current OrcaMint mint fee in LCAI and USD (live $0.50 peg)."""
+    price = _get_lcai_price_usd()
+    if ORCAMINT_FEE_USD <= 0:
+        fee_lcai = 0.0
+    else:
+        fee_lcai = round(ORCAMINT_FEE_USD / price, 2) if price > 0 else None
+    return jsonify({
+        'fee_usd':    ORCAMINT_FEE_USD,
+        'fee_lcai':   fee_lcai,
+        'lcai_price': price,
+        'fee_wallet': ORCAMINT_FEE_WALLET,
+    })
+
+@app.route('/api/orcamint/record', methods=['POST'])
+def orcamint_record():
+    """Verify $0.50 LCAI mint fee before the frontend calls contract mint()."""
+    body = request.get_json(silent=True) or {}
+    wallet = (body.get('wallet') or '').strip().lower()
+    payment_tx = (body.get('paymentTxHash') or '').strip()
+    if not wallet:
+        return jsonify({'error': 'wallet required'}), 400
+    fee_err = _verify_native_lcai_fee(
+        wallet, payment_tx, ORCAMINT_FEE_USD, ORCAMINT_FEE_WALLET,
+        _load_om_used_tx, _save_om_used_tx)
+    if fee_err:
+        return fee_err
+    return jsonify({'ok': True})
 
 @app.route('/api/lighttunes/upload', methods=['POST'])
 def lighttunes_upload():
