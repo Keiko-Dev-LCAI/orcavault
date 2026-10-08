@@ -553,13 +553,22 @@ _client = None
 _client_lock = threading.Lock()
 
 
+def _aivm_pk():
+    # Relay wallet pays AIVM on this service (RELAY_PRIVATE_KEY). LIGHTCHAIN_PRIVATE_KEY
+    # is the name the shared client uses elsewhere in the fleet.
+    return (
+        os.environ.get("LIGHTCHAIN_PRIVATE_KEY", "").strip()
+        or os.environ.get("RELAY_PRIVATE_KEY", "").strip()
+    )
+
+
 def configured():
-    return bool(os.environ.get("LIGHTCHAIN_PRIVATE_KEY", "").strip())
+    return bool(_aivm_pk())
 
 
 def _ensure_client():
     global _client
-    pk = os.environ.get("LIGHTCHAIN_PRIVATE_KEY", "").strip()
+    pk = _aivm_pk()
     if not pk:
         raise RuntimeError("AIVM is not configured")
     if _client is None:
