@@ -1554,6 +1554,9 @@ def lighttube_upload():
         recovered = Account.recover_message(msg, signature=signature).lower()
         if recovered != wallet:
             return jsonify({'error': 'Signature does not match wallet'}), 401
+        stale = _reject_stale_sig(timestamp, signature)
+        if stale:
+            return stale
     except Exception as e:
         return jsonify({'error': f'Signature error: {e}'}), 401
 
@@ -1631,6 +1634,9 @@ def lighttube_upload_init():
                 recovered = Account.recover_message(msg, signature=signature).lower()
                 if recovered != wallet:
                     return jsonify({'error': 'Signature does not match wallet'}), 401
+                stale = _reject_stale_sig(timestamp, signature)
+                if stale:
+                    return stale
             except Exception as e:
                 return jsonify({'error': f'Signature error: {e}'}), 401
             ok, err = _verify_lt_video_uploader(repair_video_id, wallet, contract_version)
@@ -1662,6 +1668,9 @@ def lighttube_upload_init():
             recovered = Account.recover_message(msg, signature=signature).lower()
             if recovered != wallet:
                 return jsonify({'error': 'Signature does not match wallet'}), 401
+            stale = _reject_stale_sig(timestamp, signature)
+            if stale:
+                return stale
         except Exception as e:
             return jsonify({'error': f'Signature error: {e}'}), 401
 
@@ -3911,6 +3920,9 @@ def relay_upload():
         )
         if Web3.to_checksum_address(recovered) != owner_address:
             return jsonify({'error': 'Signature does not match wallet'}), 401
+        stale = _reject_stale_sig(timestamp, signature)
+        if stale:
+            return stale
     except Exception as e:
         return jsonify({'error': f'Signature error: {e}'}), 401
 
@@ -4787,6 +4799,69 @@ def _save_om_used_tx(hashes: set):
     except Exception as e:
         print(f"Warning: could not save orcamint used_tx: {e}")
 
+_SIG_MAX_AGE = 600
+_spent_sigs = set()
+_spent_sigs_lock = threading.Lock()
+_describe_hits = {}
+_describe_lock = threading.Lock()
+
+
+def _fresh_timestamp(raw, max_age=_SIG_MAX_AGE):
+    """Unix seconds or milliseconds. None when missing or outside 10 minutes."""
+    try:
+        n = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if n > 10_000_000_000:
+        n = n // 1000
+    if n <= 0 or abs(time.time() - n) > max_age:
+        return None
+    return n
+
+
+def _use_sig_once(signature):
+    sig = (signature or "").strip().lower()
+    if not sig:
+        return False
+    with _spent_sigs_lock:
+        if sig in _spent_sigs:
+            return False
+        _spent_sigs.add(sig)
+        if len(_spent_sigs) > 8000:
+            _spent_sigs.clear()
+            _spent_sigs.add(sig)
+        return True
+
+
+def _reject_stale_sig(timestamp, signature):
+    if _fresh_timestamp(timestamp) is None:
+        return jsonify({'error': 'That signature expired. Sign again.'}), 401
+    if not _use_sig_once(signature):
+        return jsonify({'error': 'That signature was already used.'}), 401
+    return None
+
+
+def _describe_limited(wallet):
+    now = time.time()
+    ip = (request.headers.get("CF-Connecting-IP") or "").strip()
+    if not ip:
+        last = ""
+        for hop in (request.headers.get("X-Forwarded-For") or "").split(","):
+            hop = hop.strip()
+            if hop:
+                last = hop
+        ip = last or (request.remote_addr or "0")
+    with _describe_lock:
+        for key, limit in ((f"w:{wallet}", 12), (f"ip:{ip}", 24)):
+            hits = [t for t in _describe_hits.get(key, []) if now - t < 86400]
+            if len(hits) >= limit:
+                _describe_hits[key] = hits
+                return True
+            hits.append(now)
+            _describe_hits[key] = hits
+    return False
+
+
 def _verify_native_lcai_fee(wallet, payment_tx, fee_usd, fee_wallet, load_used, save_used):
     """LightTunes-style native LCAI fee. Returns (response, status) on failure, else None."""
     wallet = (wallet or '').lower()
@@ -5205,12 +5280,18 @@ def lighttunes_upload():
     if not user_wallet:
         return jsonify({'error': 'wallet required'}), 400
 
-    # Verify wallet signature
+    # Verify wallet signature. The timestamp stops a captured signature
+    # from authorizing later uploads.
+    timestamp = request.form.get('timestamp', '').strip()
     try:
-        msg = encode_defunct(text=f"LightTunes upload: {user_wallet.lower()}")
+        msg = encode_defunct(
+            text=f"LightTunes upload: {user_wallet.lower()}\nTimestamp: {timestamp}")
         recovered = Account.recover_message(msg, signature=signature)
         if recovered.lower() != user_wallet.lower():
             return jsonify({'error': 'Signature verification failed'}), 401
+        stale = _reject_stale_sig(timestamp, signature)
+        if stale:
+            return stale
     except Exception as e:
         return jsonify({'error': f'Signature error: {e}'}), 401
 
@@ -5927,13 +6008,51 @@ def call_aivm_describe(prompt):
 
 @app.route('/api/describe-upload', methods=['POST'])
 def describe_upload():
-    """Generate a 2-sentence AI description for a video or audio upload."""
+    """AI description only after a wallet signature and the upload fee.
+
+    The fee is the same native LCAI payment the upload routes already use.
+    A zero promo fee still requires the signature. AIVM is not called until
+    both checks pass.
+    """
     data = request.get_json() or {}
-    title = data.get('title', '').strip()
-    category = data.get('category', '')
-    media_type = data.get('type', 'video')
+    title = (data.get('title') or '').strip()
+    category = (data.get('category') or '').strip()[:80]
+    media_type = (data.get('type') or 'video').strip().lower()
+    wallet = (data.get('wallet') or '').strip().lower()
+    signature = (data.get('signature') or '').strip()
+    timestamp = str(data.get('timestamp') or '').strip()
+    payment_tx = (data.get('paymentTxHash') or '').strip()
     if not title:
         return jsonify({'error': 'Title is required'}), 400
+    if len(title) > 200:
+        return jsonify({'error': 'Title is too long'}), 413
+    if not wallet or not signature:
+        return jsonify({'error': 'A wallet signature is required.'}), 401
+    message = (
+        f"OrcaVault describe\nWallet: {wallet}\nTitle: {title}\nTimestamp: {timestamp}"
+    )
+    try:
+        recovered = Account.recover_message(
+            encode_defunct(text=message), signature=signature).lower()
+    except Exception:
+        return jsonify({'error': 'A wallet signature is required.'}), 401
+    if recovered != wallet:
+        return jsonify({'error': 'A wallet signature is required.'}), 401
+    stale = _reject_stale_sig(timestamp, signature)
+    if stale:
+        return stale
+    if media_type == 'audio':
+        fee_err = _verify_native_lcai_fee(
+            wallet, payment_tx, LIGHTTUNES_FEE_USD, LIGHTTUNES_FEE_WALLET,
+            _load_used_tx, _save_used_tx)
+    else:
+        fee_err = _verify_native_lcai_fee(
+            wallet, payment_tx, LIGHTTUBE_FEE_USD, LIGHTTUBE_FEE_WALLET,
+            _load_ltube_used_tx, _save_ltube_used_tx)
+    if fee_err:
+        return fee_err
+    if _describe_limited(wallet):
+        return jsonify({'error': 'Too many descriptions today. Try again tomorrow.'}), 429
     if media_type == 'audio':
         prompt = (
             f"Write a 2-sentence description for a song called '{title}'"
@@ -5950,7 +6069,7 @@ def describe_upload():
         description = call_aivm_describe(prompt)
         return jsonify({'description': description})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e)[:200]}), 500
 
 # ─── end AI Description Generator ─────────────────────────────────────────────
 
